@@ -1,133 +1,1002 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>S-Tracker — Smart Security & Tracking Dashboard</title>
-    
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Leaflet.js -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
-    <!-- Leaflet Draw -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
-    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    
-    <!-- Leaflet Context Menu -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-contextmenu@1.4.0/dist/leaflet.contextmenu.css" />
-    <script src="https://unpkg.com/leaflet-contextmenu@1.4.0/dist/leaflet.contextmenu.js"></script>
-    
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700&family=Manrope:wght@400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-    
-    <!-- Utility Libraries -->
-    <script src="https://unpkg.com/@mapbox/togeojson@0.16.2/togeojson.js"></script>
-    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
-    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-    
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WatchMe — Smart Security Dashboard</title>
+  <meta name="description" content="Humanitarian Security & Tracking Dashboard — Palestine / Gaza Strip Operations" />
+
+  <!-- =====================================================================
+       FONTS
+  ====================================================================== -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- =====================================================================
+       TAILWIND CSS
+  ====================================================================== -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['Syne', 'sans-serif'],
+            body:    ['Manrope', 'sans-serif'],
+            mono:    ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50:  '#fff7ed',
+              100: '#ffedd5',
+              200: '#fed7aa',
+              300: '#fdba74',
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+              700: '#c2410c',
+              800: '#9a3412',
+              900: '#7c2d12',
+            },
+            ops: {
+              red:    '#ef4444',
+              amber:  '#f59e0b',
+              yellow: '#eab308',
+              green:  '#22c55e',
+              blue:   '#3b82f6',
+              cyan:   '#06b6d4',
+            }
+          },
+          animation: {
+            'slide-in':    'slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+            'fade-up':     'fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+            'pulse-slow':  'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'ping-slow':   'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
+          },
+          keyframes: {
+            slideIn: { from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(0)' } },
+            fadeUp:  { from: { opacity: '0', transform: 'translateY(8px)' }, to: { opacity: '1', transform: 'translateY(0)' } },
+          },
+          boxShadow: {
+            'panel':  '0 0 0 1px rgba(249,115,22,0.12), 0 4px 24px rgba(0,0,0,0.18)',
+            'card':   '0 2px 12px rgba(0,0,0,0.12)',
+            'glow':   '0 0 20px rgba(249,115,22,0.35)',
+            'glow-red': '0 0 16px rgba(239,68,68,0.45)',
+          },
+        }
+      }
+    };
+  </script>
+
+  <!-- =====================================================================
+       LEAFLET CSS
+  ====================================================================== -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet.draw -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+
+  <!-- =====================================================================
+       CUSTOM CSS
+  ====================================================================== -->
+  <link rel="stylesheet" href="/style.css" />
 </head>
-<body class="dark-mode">
-    <!-- Main Container -->
-    <div class="flex h-screen bg-gray-900 text-gray-100">
+
+<!-- ==========================================================================
+     BODY — full-screen layout: sidebar (left) + map (right)
+=========================================================================== -->
+<body class="h-full font-body bg-slate-950 text-slate-100 overflow-hidden" id="app-body">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       LOADING SCREEN
+  ══════════════════════════════════════════════════════════════════════ -->
+  <div id="loading-screen"
+       class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-slate-950">
+    <div class="flex flex-col items-center gap-6">
+      <!-- Animated logo mark -->
+      <div class="relative w-20 h-20">
+        <div class="absolute inset-0 rounded-full border-2 border-brand-500 opacity-20 animate-ping-slow"></div>
+        <div class="absolute inset-2 rounded-full border-2 border-brand-400 opacity-40 animate-ping-slow" style="animation-delay:0.3s"></div>
+        <div class="absolute inset-4 rounded-full bg-brand-500 flex items-center justify-center">
+          <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="text-center">
+        <h1 class="font-display font-bold text-2xl text-white tracking-tight">WatchMe</h1>
+        <p class="text-slate-400 text-sm mt-1 font-mono">Initialising security dashboard…</p>
+      </div>
+      <!-- Progress bar -->
+      <div class="w-48 h-0.5 bg-slate-800 rounded-full overflow-hidden">
+        <div id="loading-bar" class="h-full bg-brand-500 rounded-full transition-all duration-300" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TOAST NOTIFICATION CONTAINER
+  ══════════════════════════════════════════════════════════════════════ -->
+  <div id="toast-container"
+       class="fixed top-4 right-4 z-[8000] flex flex-col gap-2 pointer-events-none"
+       aria-live="polite">
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       MAIN LAYOUT WRAPPER
+  ══════════════════════════════════════════════════════════════════════ -->
+  <div class="flex h-full w-full overflow-hidden" id="main-layout">
+
+    <!-- ================================================================
+         SIDEBAR (LEFT SIDEWORKER)
+    ================================================================= -->
+    <aside id="sidebar"
+           class="sidebar-panel relative z-[1000] flex flex-col w-[380px] min-w-[380px] h-full bg-slate-900 border-r border-slate-800 overflow-hidden transition-all duration-300 ease-in-out">
+
+      <!-- ── RESIZE HANDLE ── -->
+      <div id="sidebar-resize-handle"
+           class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-brand-500 transition-colors z-10 group">
+        <div class="w-full h-full group-hover:bg-brand-500 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+      </div>
+
+      <!-- ────────────────────────────────────────────────────────────────
+           HEADER — Branding + Controls
+      ──────────────────────────────────────────────────────────────── -->
+      <header class="flex-none px-5 py-4 border-b border-slate-800 bg-slate-900">
+        <div class="flex items-center justify-between">
+          <!-- Logo & brand -->
+          <div class="flex items-center gap-3">
+            <div class="relative w-9 h-9 flex-none">
+              <div class="absolute inset-0 rounded-lg bg-brand-500 opacity-20 animate-pulse-slow"></div>
+              <div class="relative w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center shadow-glow">
+                <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+                </svg>
+              </div>
+            </div>
+            <div>
+              <h1 class="font-display font-bold text-lg text-white leading-none tracking-tight">WatchMe</h1>
+              <p class="text-[10px] text-slate-400 font-mono uppercase tracking-widest mt-0.5">Security Dashboard</p>
+            </div>
+          </div>
+
+          <!-- Header action buttons -->
+          <div class="flex items-center gap-1.5">
+            <!-- Dark Mode Toggle -->
+            <button id="dark-mode-toggle"
+                    class="group relative w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-800 transition-colors"
+                    title="Toggle dark/light mode"
+                    aria-label="Toggle dark mode">
+              <!-- Sun icon (shown in dark mode) -->
+              <svg id="icon-sun" class="w-4 h-4 text-brand-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
+              </svg>
+              <!-- Moon icon (shown in light mode) -->
+              <svg id="icon-moon" class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/>
+              </svg>
+            </button>
+
+            <!-- Collapse sidebar -->
+            <button id="sidebar-collapse-btn"
+                    class="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-800 transition-colors"
+                    title="Collapse sidebar"
+                    aria-label="Collapse sidebar">
+              <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Live Status Bar -->
+        <div class="flex items-center gap-3 mt-3 pt-3 border-t border-slate-800">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-ops-green animate-pulse-slow"></span>
+            <span class="text-[10px] font-mono text-ops-green uppercase tracking-widest">LIVE</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[10px] font-mono text-slate-500" id="status-layer-count">0 layers</span>
+            <span class="text-slate-700">·</span>
+            <span class="text-[10px] font-mono text-slate-500" id="status-incident-count">0 incidents</span>
+            <span class="text-slate-700">·</span>
+            <span class="text-[10px] font-mono text-slate-500" id="status-time">--:--</span>
+          </div>
+          <div class="ml-auto">
+            <span id="status-risk-badge"
+                  class="hidden text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-ops-red text-white animate-pulse-slow">
+              ⚠ AT RISK
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ────────────────────────────────────────────────────────────────
+           SCROLLABLE CONTENT AREA
+      ──────────────────────────────────────────────────────────────── -->
+      <div class="flex-1 overflow-y-auto sidebar-scroll" id="sidebar-content">
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 1: GLOBAL SEARCH                               │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 pt-4 pb-2">
+          <div class="relative">
+            <div class="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+              <svg class="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+            </div>
+            <input type="text"
+                   id="global-search"
+                   placeholder="Search place, staff, or coordinates…"
+                   autocomplete="off"
+                   class="w-full pl-9 pr-10 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all font-body" />
+            <!-- Clear button -->
+            <button id="search-clear"
+                    class="absolute inset-y-0 right-2 px-1.5 flex items-center text-slate-500 hover:text-slate-300 transition-colors hidden">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Search results dropdown -->
+          <div id="search-results"
+               class="hidden mt-1 rounded-xl bg-slate-800 border border-slate-700 shadow-panel overflow-hidden animate-fade-up">
+            <div id="search-results-list" class="max-h-60 overflow-y-auto divide-y divide-slate-700"></div>
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 2: FILE UPLOAD — KML / KMZ / CSV              │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3">
+          <div class="section-header flex items-center justify-between mb-2.5">
+            <div class="flex items-center gap-2">
+              <div class="w-1 h-4 rounded-full bg-brand-500"></div>
+              <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Import Layers</h2>
+            </div>
+            <span class="text-[10px] font-mono text-slate-500" id="layer-count-badge">0 / 15</span>
+          </div>
+
+          <!-- Drop Zone -->
+          <div id="drop-zone"
+               class="drop-zone relative flex flex-col items-center justify-center gap-2.5 p-5 rounded-xl border-2 border-dashed border-slate-700 bg-slate-800/40 hover:border-brand-500 hover:bg-brand-500/5 transition-all cursor-pointer group"
+               role="button"
+               tabindex="0"
+               aria-label="Upload KML, KMZ, or CSV file">
+
+            <!-- Animated upload icon -->
+            <div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center group-hover:border-brand-500 group-hover:bg-brand-500/10 transition-all">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-brand-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+              </svg>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-slate-300 font-medium">Drop files here or <span class="text-brand-400">browse</span></p>
+              <p class="text-[11px] text-slate-500 font-mono mt-0.5">.kml · .kmz · .csv supported</p>
+            </div>
+
+            <!-- Drag-active overlay -->
+            <div id="drop-overlay"
+                 class="hidden absolute inset-0 rounded-xl bg-brand-500/15 border-2 border-brand-400 flex flex-col items-center justify-center pointer-events-none">
+              <svg class="w-8 h-8 text-brand-400 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+              </svg>
+              <p class="text-brand-300 font-display font-bold text-sm mt-2">Release to upload</p>
+            </div>
+
+            <!-- Hidden file input -->
+            <input type="file"
+                   id="file-input"
+                   accept=".kml,.kmz,.csv"
+                   multiple
+                   class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+          </div>
+
+          <!-- Upload progress -->
+          <div id="upload-progress-container" class="hidden mt-2.5 space-y-1.5">
+            <!-- JS fills this in -->
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 3: LAYER MANAGEMENT                            │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-1 h-4 rounded-full bg-ops-cyan"></div>
+              <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Layer Control</h2>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button id="toggle-all-layers"
+                      class="text-[10px] font-mono text-slate-400 hover:text-brand-400 px-2 py-0.5 rounded hover:bg-slate-800 transition-colors">
+                All OFF
+              </button>
+              <button id="delete-all-layers"
+                      class="text-[10px] font-mono text-ops-red hover:text-red-300 px-2 py-0.5 rounded hover:bg-slate-800 transition-colors">
+                Clear All
+              </button>
+            </div>
+          </div>
+
+          <!-- Layer list container -->
+          <div id="layer-list" class="space-y-2">
+            <!-- Empty state -->
+            <div id="layer-empty-state" class="flex flex-col items-center justify-center py-6 rounded-xl bg-slate-800/30 border border-dashed border-slate-700">
+              <svg class="w-8 h-8 text-slate-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0l4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0l-5.571 3-5.571-3"/>
+              </svg>
+              <p class="text-slate-500 text-xs font-mono">No layers loaded</p>
+            </div>
+            <!-- Dynamic layer cards injected by JS here -->
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 4: DRAWING TOOLS                               │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center gap-2 mb-3">
+            <div class="w-1 h-4 rounded-full bg-ops-blue"></div>
+            <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Drawing Tools</h2>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <!-- Marker -->
+            <button data-draw="marker"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-brand-500 hover:bg-brand-500/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-brand-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-brand-300 transition-colors">Marker</span>
+            </button>
+            <!-- Polyline -->
+            <button data-draw="polyline"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-blue hover:bg-ops-blue/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-ops-blue transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-ops-blue transition-colors">Path</span>
+            </button>
+            <!-- Polygon -->
+            <button data-draw="polygon"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-amber hover:bg-ops-amber/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-ops-amber transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-ops-amber transition-colors">Zone</span>
+            </button>
+            <!-- Circle -->
+            <button data-draw="circle"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-cyan hover:bg-ops-cyan/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-ops-cyan transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="9"/>
+                <path stroke-linecap="round" d="M12 3v2M12 19v2M3 12h2M19 12h2"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-ops-cyan transition-colors">Radius</span>
+            </button>
+            <!-- Edit mode -->
+            <button data-draw="edit"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-green hover:bg-ops-green/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-ops-green transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-ops-green transition-colors">Edit</span>
+            </button>
+            <!-- Delete drawn -->
+            <button data-draw="delete"
+                    class="draw-btn flex flex-col items-center gap-1.5 p-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-red hover:bg-ops-red/10 transition-all group">
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-ops-red transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+              </svg>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-ops-red transition-colors">Delete</span>
+            </button>
+          </div>
+
+          <!-- Measurement HUD -->
+          <div id="measurement-hud"
+               class="hidden mt-2.5 p-3 rounded-xl bg-slate-800 border border-slate-700">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Measurement</span>
+              <button id="measurement-close"
+                      class="text-slate-500 hover:text-slate-300 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <div class="bg-slate-900 rounded-lg p-2">
+                <p class="text-[10px] text-slate-500 font-mono">Distance</p>
+                <p class="text-sm font-mono font-semibold text-ops-cyan mt-0.5" id="meas-distance">—</p>
+              </div>
+              <div class="bg-slate-900 rounded-lg p-2">
+                <p class="text-[10px] text-slate-500 font-mono">Area</p>
+                <p class="text-sm font-mono font-semibold text-ops-amber mt-0.5" id="meas-area">—</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 5: EXPORT                                       │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center gap-2 mb-3">
+            <div class="w-1 h-4 rounded-full bg-ops-green"></div>
+            <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Export Map</h2>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btn-export-kml"
+                    class="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-green hover:bg-ops-green/10 text-slate-300 hover:text-ops-green text-xs font-mono font-semibold transition-all active:scale-95">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+              Export KML
+            </button>
+            <button id="btn-export-kmz"
+                    class="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 border border-slate-700 hover:border-ops-cyan hover:bg-ops-cyan/10 text-slate-300 hover:text-ops-cyan text-xs font-mono font-semibold transition-all active:scale-95">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/>
+              </svg>
+              Export KMZ
+            </button>
+          </div>
+          <p class="text-[10px] font-mono text-slate-600 text-center mt-2">
+            Exports all visible layers + drawn shapes. Compatible with Google Maps &amp; Maps.me.
+          </p>
+        </div>
+
+        <!-- Bottom spacer -->
+        <div class="h-6"></div>
+
+      </div><!-- /sidebar-content -->
+    </aside>
+
+    <!-- ================================================================
+         SIDEBAR COLLAPSE TAB (shown when sidebar is hidden)
+    ================================================================= -->
+    <button id="sidebar-expand-btn"
+            class="hidden absolute left-0 top-1/2 -translate-y-1/2 z-[1001] w-7 h-20 rounded-r-xl bg-slate-900 border border-l-0 border-slate-800 flex flex-col items-center justify-center gap-1 hover:bg-slate-800 transition-colors shadow-lg"
+            aria-label="Expand sidebar">
+      <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+      </svg>
+    </button>
+
+    <!-- ================================================================
+         MAP CONTAINER + MAP OVERLAY CONTROLS
+    ================================================================= -->
+    <div class="relative flex-1 overflow-hidden" id="map-wrapper">
+
+      <!-- Leaflet map -->
+      <div id="map" class="absolute inset-0 z-0"></div>
+
+      <!-- ── TOP-RIGHT MAP CONTROLS ── -->
+      <div class="absolute top-4 right-4 z-[500] flex flex-col gap-2">
+
+        <!-- Proximity Sidebar Toggle Button (Triggers slide of Right Panel) -->
+        <div class="map-control-group bg-slate-900/95 backdrop-blur-sm rounded-xl border border-slate-800 p-1 shadow-panel flex justify-end">
+          <button id="proximity-toggle-btn"
+                  class="px-3 py-1.5 rounded-lg text-[10px] font-mono font-semibold text-ops-amber hover:bg-slate-800 flex items-center gap-1.5 transition-all active:scale-95">
+            <span class="w-1.5 h-1.5 rounded-full bg-ops-amber animate-pulse-slow"></span>
+            PROXIMITY SCAN
+          </button>
+        </div>
+
+        <!-- Tile layer switcher -->
+        <div class="map-control-group bg-slate-900/95 backdrop-blur-sm rounded-xl border border-slate-800 p-1 shadow-panel">
+          <div class="flex gap-1">
+            <button data-tile="street"
+                    class="tile-btn active px-3 py-1.5 rounded-lg text-[10px] font-mono text-slate-300 hover:bg-slate-800 transition-all">
+              Street
+            </button>
+            <button data-tile="satellite"
+                    class="tile-btn px-3 py-1.5 rounded-lg text-[10px] font-mono text-slate-400 hover:bg-slate-800 transition-all">
+              Satellite
+            </button>
+            <button data-tile="topo"
+                    class="tile-btn px-3 py-1.5 rounded-lg text-[10px] font-mono text-slate-400 hover:bg-slate-800 transition-all">
+              Topo
+            </button>
+          </div>
+        </div>
+
+        <!-- Map action buttons -->
+        <div class="map-control-group bg-slate-900/95 backdrop-blur-sm rounded-xl border border-slate-800 shadow-panel overflow-hidden">
+          <!-- Zoom in -->
+          <button id="map-zoom-in"
+                  class="w-full flex items-center justify-center p-2.5 hover:bg-slate-800 transition-colors border-b border-slate-800"
+                  aria-label="Zoom in">
+            <svg class="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+            </svg>
+          </button>
+          <!-- Zoom out -->
+          <button id="map-zoom-out"
+                  class="w-full flex items-center justify-center p-2.5 hover:bg-slate-800 transition-colors border-b border-slate-800"
+                  aria-label="Zoom out">
+            <svg class="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12h-15"/>
+            </svg>
+          </button>
+          <!-- Fit all layers -->
+          <button id="map-fit-all"
+                  class="w-full flex items-center justify-center p-2.5 hover:bg-slate-800 transition-colors border-b border-slate-800"
+                  title="Fit all layers"
+                  aria-label="Fit all layers in view">
+            <svg class="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
+            </svg>
+          </button>
+          <!-- Locate me -->
+          <button id="map-locate-me"
+                  class="w-full flex items-center justify-center p-2.5 hover:bg-slate-800 transition-colors"
+                  title="My location"
+                  aria-label="Go to my location">
+            <svg class="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ── FLOATING PROXIMITY PANEL (COLLAPSIBLE RIGHT-SIDE PANEL) ── -->
+      <!-- Houses Incident Forms & Proximity Assessments to reduce clutter -->
+      <div id="proximity-panel"
+           class="absolute top-4 right-4 z-[600] w-[350px] h-[calc(100%-2rem)] flex flex-col rounded-2xl glass-panel semi-transparent-glass shadow-panel transition-all duration-300 transform translate-x-[380px] hidden opacity-0">
         
-        <!-- LEFT SIDEBAR: Layers & Controls -->
-        <aside id="sidebar" class="sidebar-glass w-80 flex flex-col border-r border-gray-700 overflow-hidden">
-            <!-- Header -->
-            <div class="p-4 border-b border-gray-700">
-                <h1 class="text-xl font-bold text-blue-400">S-Tracker</h1>
-                <p class="text-xs text-gray-400">Smart Security Dashboard</p>
+        <!-- Header -->
+        <div class="flex-none px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="w-1.5 h-4 rounded-full bg-ops-amber animate-pulse-slow"></div>
+            <h3 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Proximity Scan</h3>
+          </div>
+          <button id="proximity-panel-close"
+                  class="text-slate-500 hover:text-slate-300 transition-colors"
+                  aria-label="Close panel">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Proximity Scroll Content -->
+        <div class="flex-1 overflow-y-auto sidebar-scroll p-4 space-y-4">
+          
+          <!-- Live Incident Configuration -->
+          <div class="space-y-3">
+            <div class="flex items-center gap-1">
+              <svg class="w-3.5 h-3.5 text-ops-red animate-pulse-slow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+              </svg>
+              <h4 class="font-display font-semibold text-xs text-slate-300 uppercase tracking-wider">1. Setup Target</h4>
             </div>
-            
-            <!-- Tabs -->
-            <div class="flex border-b border-gray-700">
-                <button id="tab-layers" class="flex-1 px-4 py-3 text-sm font-medium border-b-2 border-blue-500 text-blue-400 cursor-pointer">
-                    Layers
-                </button>
-                <button id="tab-incident" class="flex-1 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-gray-200 cursor-pointer">
-                    Incident
-                </button>
-                <button id="tab-history" class="flex-1 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-gray-200 cursor-pointer">
-                    History
-                </button>
+
+            <!-- Title -->
+            <div>
+              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Incident Title</label>
+              <input type="text"
+                     id="incident-title"
+                     placeholder="e.g. Artillery Strike — Block 7"
+                     class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-body" />
             </div>
-            
-            <!-- Content Area -->
-            <div class="flex-1 overflow-y-auto p-4">
-                
-                <!-- LAYERS TAB -->
-                <div id="content-layers" class="space-y-4">
-                    <!-- Search Bar -->
-                    <input 
-                        id="search-bar" 
-                        type="text" 
-                        placeholder="Search places or coordinates..." 
-                        class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500"
-                    >
-                    
-                    <!-- File Upload -->
-                    <div id="upload-area" class="p-4 border-2 border-dashed border-gray-600 rounded cursor-pointer hover:border-blue-500 transition text-center">
-                        <p class="text-sm text-gray-400">Drop KML/KMZ/CSV files here</p>
-                    </div>
-                    
-                    <!-- Layers List -->
-                    <div id="layers-list" class="space-y-2">
-                        <!-- Dynamically populated -->
-                    </div>
-                </div>
-                
-                <!-- INCIDENT TAB -->
-                <div id="content-incident" class="hidden space-y-4">
-                    <div class="text-sm">
-                        <label class="block text-gray-300 font-medium mb-2">Incident Type</label>
-                        <select id="incident-type" class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm">
-                            <option>Airstrike</option>
-                            <option>Explosion</option>
-                            <option>Fire</option>
-                            <option>Medical Emergency</option>
-                        </select>
-                    </div>
-                    
-                    <div class="text-sm">
-                        <label class="block text-gray-300 font-medium mb-2">Incident Name</label>
-                        <input id="incident-name" type="text" placeholder="e.g., Gaza City Airstrike" class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm">
-                    </div>
-                    
-                    <div class="text-sm">
-                        <label class="block text-gray-300 font-medium mb-2">Description</label>
-                        <textarea id="incident-description" placeholder="Additional details..." class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm h-20"></textarea>
-                    </div>
-                    
-                    <div class="grid grid-cols-2 gap-3">
-                        <div class="text-sm">
-                            <label class="block text-gray-300 font-medium mb-2">Latitude</label>
-                            <input id="incident-lat" type="number" placeholder="31.5" class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm" step="0.0001">
-                        </div>
-                        <div class="text-sm">
-                            <label class="block text-gray-300 font-medium mb-2">Longitude</label>
-                            <input id="incident-lng" type="number" placeholder="34.47" class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-sm" step="0.0001">
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- HISTORY TAB -->
-                <div id="content-history" class="hidden space-y-2">
-                    <div id="history-list" class="text-xs text-gray-400">
-                        <!-- Populated dynamically -->
-                    </div>
-                </div>
+
+            <!-- Coordinates row -->
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Latitude</label>
+                <input type="text"
+                       id="incident-lat"
+                       placeholder="31.5000"
+                       class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
+              </div>
+              <div>
+                <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Longitude</label>
+                <input type="text"
+                       id="incident-lng"
+                       placeholder="34.4667"
+                       class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
+              </div>
             </div>
-            
-            <!-- Footer Controls -->
-            <div class="p-4 border-t border-gray-700 space-y-2">
-                <button id="btn-theme" class="w-full px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm">
-                    🌙 Dark Mode
+
+            <!-- Hazard radius -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Hazard Radius</label>
+                <span id="radius-value-display" class="text-[9px] font-mono text-ops-amber">500 m</span>
+              </div>
+              <input type="range"
+                     id="incident-radius"
+                     min="100"
+                     max="5000"
+                     step="50"
+                     value="500"
+                     class="w-full accent-ops-amber cursor-pointer" />
+              <div class="flex justify-between mt-0.5">
+                <span class="text-[9px] font-mono text-slate-600">100m</span>
+                <span class="text-[9px] font-mono text-slate-600">5km</span>
+              </div>
+            </div>
+
+            <!-- Severity -->
+            <div>
+              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Severity</label>
+              <div class="grid grid-cols-4 gap-1">
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="low" class="sr-only" />
+                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-green">
+                    LOW
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="medium" class="sr-only" checked />
+                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-yellow" data-default="true">
+                    MED
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="high" class="sr-only" />
+                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-amber">
+                    HIGH
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="critical" class="sr-only" />
+                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-red">
+                    CRIT
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Description -->
+            <div>
+              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Description</label>
+              <textarea id="incident-description"
+                        rows="2"
+                        placeholder="Situation report or notes…"
+                        class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-body resize-none"></textarea>
+            </div>
+
+            <!-- Quick Map placement Trigger -->
+            <button id="btn-place-incident-mode"
+                    class="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-dashed border-slate-700 hover:border-ops-red text-slate-500 hover:text-ops-red text-[10px] font-mono transition-all">
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zm-7.518-.267A8.25 8.25 0 1120.25 10.5M8.288 14.212A5.25 5.25 0 1117.25 10.5"/>
+              </svg>
+              Select Placement on Map
+            </button>
+
+            <!-- Actions buttons -->
+            <div class="flex gap-2 pt-1">
+              <button id="btn-log-incident"
+                      class="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl bg-ops-red hover:bg-red-400 text-white text-xs font-display font-semibold transition-all shadow-glow-red hover:shadow-none active:scale-95">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+                </svg>
+                Log Incident
+              </button>
+              <button id="btn-run-proximity"
+                      class="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-500 hover:bg-brand-500/10 text-slate-300 hover:text-brand-300 text-xs font-display font-semibold transition-all active:scale-95">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+                </svg>
+                Locate & Assess
+              </button>
+            </div>
+          </div>
+
+          <!-- At-Risk Staff List -->
+          <div class="border-t border-slate-800 pt-3" id="staff-section">
+            <div class="flex items-center justify-between mb-3.5">
+              <div class="flex items-center gap-2">
+                <div class="w-1.5 h-4 rounded-full bg-ops-amber animate-pulse-slow"></div>
+                <h4 class="font-display font-semibold text-xs text-slate-300 uppercase tracking-wider">2. Assessment results</h4>
+              </div>
+              <div class="flex items-center gap-2">
+                <span id="at-risk-count-badge"
+                      class="hidden text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-ops-red text-white">
+                  0
+                </span>
+                <button id="btn-alert-all"
+                        class="hidden text-[9px] font-mono text-white bg-ops-red hover:bg-red-400 px-2 py-0.5 rounded-lg transition-colors">
+                  Alert All
                 </button>
-                <button id="btn-export" class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium">
-                    ⬇️ Export KML
-                
+              </div>
+            </div>
+
+            <!-- Filter tabs -->
+            <div class="flex gap-1 mb-3" id="staff-filter-tabs">
+              <button data-filter="all"
+                      class="staff-filter-btn active text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-brand-500 text-brand-400 transition-all">
+                All
+              </button>
+              <button data-filter="inside"
+                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
+                Inside
+              </button>
+              <button data-filter="critical"
+                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
+                Crit
+              </button>
+              <button data-filter="high"
+                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-amber hover:text-ops-amber transition-all">
+                High
+              </button>
+            </div>
+
+            <!-- Staff results list -->
+            <div id="staff-results-list" class="space-y-2">
+              <!-- Empty state -->
+              <div id="staff-empty-state" class="flex flex-col items-center justify-center py-6 rounded-xl bg-slate-950/20 border border-dashed border-slate-800">
+                <svg class="w-7 h-7 text-slate-700 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/>
+                </svg>
+                <p class="text-slate-500 text-[10px] font-mono text-center px-4">Press "Locate & Assess" after initializing an incident to map endangered assets.</p>
+              </div>
+              <!-- Dynamic staff cards injected by JS -->
+            </div>
+          </div>
+
+        </div><!-- /proximity-panel scroll content -->
+      </div><!-- /proximity-panel -->
+
+      <!-- ── BOTTOM-LEFT: COORDINATES DISPLAY ── -->
+      <div class="absolute bottom-6 left-4 z-[500]">
+        <div class="bg-slate-900/90 backdrop-blur-sm rounded-lg border border-slate-800 px-3 py-1.5 shadow-card">
+          <span id="cursor-coords" class="text-[11px] font-mono text-slate-400">
+            31.5000°N, 34.4667°E
+          </span>
+        </div>
+      </div>
+
+      <!-- ── BOTTOM-RIGHT: SCALE BAR + ATTRIBUTION ── -->
+      <div class="absolute bottom-6 right-4 z-[500] flex flex-col items-end gap-1.5">
+        <div id="map-scale-display"
+             class="bg-slate-900/90 backdrop-blur-sm rounded-lg border border-slate-800 px-3 py-1.5 shadow-card">
+          <span class="text-[11px] font-mono text-slate-500" id="map-scale-text">—</span>
+        </div>
+      </div>
+
+      <!-- ── INCIDENT PLACEMENT MODE INDICATOR ── -->
+      <div id="incident-place-mode-indicator"
+           class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[600] pointer-events-none">
+        <div class="flex flex-col items-center gap-2 animate-fade-up">
+          <div class="px-5 py-3 rounded-2xl bg-ops-red/90 backdrop-blur-sm shadow-glow-red text-white font-display font-bold text-sm flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-white animate-ping-slow"></span>
+            Click map to place incident
+            <kbd class="ml-2 text-[10px] font-mono bg-red-700/60 px-1.5 py-0.5 rounded">ESC to cancel</kbd>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── DRAW ACTIVE MODE INDICATOR ── -->
+      <div id="draw-mode-indicator"
+           class="hidden absolute top-4 left-1/2 -translate-x-1/2 z-[600] pointer-events-none">
+        <div class="px-4 py-2 rounded-xl bg-slate-900/95 backdrop-blur-sm border border-brand-500 shadow-glow text-brand-300 font-mono text-xs flex items-center gap-2">
+          <span class="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-slow"></span>
+          <span id="draw-mode-label">Drawing mode active</span>
+          <kbd class="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded">ESC to stop</kbd>
+        </div>
+      </div>
+
+    </div><!-- /map-wrapper -->
+  </div><!-- /main-layout -->
+
+  <!-- ======================================================================
+       MODALS
+  ====================================================================== -->
+
+  <!-- ── LAYER STYLE EDITOR MODAL ── -->
+  <div id="layer-style-modal"
+       class="modal-overlay hidden fixed inset-0 z-[2000] flex items-center justify-center p-4"
+       role="dialog"
+       aria-modal="true"
+       aria-label="Layer style editor">
+    <div class="modal-backdrop absolute inset-0 bg-slate-950/80 backdrop-blur-sm"></div>
+    <div class="modal-content relative w-full max-w-sm bg-slate-900 rounded-2xl border border-slate-800 shadow-panel animate-fade-up overflow-hidden">
+      <!-- Modal header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <div class="w-1 h-4 rounded-full bg-brand-500"></div>
+          <h3 class="font-display font-semibold text-slate-200" id="style-modal-title">Style Layer</h3>
+        </div>
+        <button class="modal-close w-7 h-7 rounded-lg flex items-center justify-center hover:bg-slate-800 transition-colors text-slate-400"
+                data-modal="layer-style-modal">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <!-- Modal body -->
+      <div class="px-5 py-4 space-y-4">
+        <input type="hidden" id="style-modal-layer-id" />
+        <!-- Stroke color -->
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-mono text-slate-400">Stroke Color</label>
+          <div class="flex items-center gap-2">
+            <input type="color" id="style-stroke-color" value="#f97316"
+                   class="w-8 h-8 rounded-lg cursor-pointer border border-slate-700 bg-transparent p-0.5" />
+            <span id="style-stroke-hex" class="text-xs font-mono text-slate-500">#f97316</span>
+          </div>
+        </div>
+        <!-- Fill color -->
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-mono text-slate-400">Fill Color</label>
+          <div class="flex items-center gap-2">
+            <input type="color" id="style-fill-color" value="#f97316"
+                   class="w-8 h-8 rounded-lg cursor-pointer border border-slate-700 bg-transparent p-0.5" />
+            <span id="style-fill-hex" class="text-xs font-mono text-slate-500">#f97316</span>
+          </div>
+        </div>
+        <!-- Stroke weight -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-sm font-mono text-slate-400">Stroke Weight</label>
+            <span id="style-weight-val" class="text-xs font-mono text-slate-500">2px</span>
+          </div>
+          <input type="range" id="style-weight" min="1" max="8" step="1" value="2"
+                 class="w-full accent-brand-500 cursor-pointer" />
+        </div>
+        <!-- Fill opacity -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-sm font-mono text-slate-400">Fill Opacity</label>
+            <span id="style-fill-opacity-val" class="text-xs font-mono text-slate-500">0.35</span>
+          </div>
+          <input type="range" id="style-fill-opacity" min="0" max="1" step="0.05" value="0.35"
+                 class="w-full accent-brand-500 cursor-pointer" />
+        </div>
+        <!-- Layer opacity -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-sm font-mono text-slate-400">Layer Opacity</label>
+            <span id="style-layer-opacity-val" class="text-xs font-mono text-slate-500">1.0</span>
+          </div>
+          <input type="range" id="style-layer-opacity" min="0.1" max="1" step="0.05" value="1"
+                 class="w-full accent-brand-500 cursor-pointer" />
+        </div>
+      </div>
+      <!-- Modal footer -->
+      <div class="flex gap-2 px-5 pb-5">
+        <button id="style-apply-btn"
+                class="flex-1 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-white text-sm font-display font-semibold transition-all active:scale-95">
+          Apply Style
+        </button>
+        <button class="modal-close px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-display font-semibold transition-all"
+                data-modal="layer-style-modal">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ALERT CONFIRMATION MODAL ── -->
+  <div id="alert-modal"
+       class="modal-overlay hidden fixed inset-0 z-[2000] flex items-center justify-center p-4"
+       role="dialog"
+       aria-modal="true">
+    <div class="modal-backdrop absolute inset-0 bg-slate-950/80 backdrop-blur-sm"></div>
+    <div class="modal-content relative w-full max-w-sm bg-slate-900 rounded-2xl border border-slate-800 shadow-panel animate-fade-up overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <div class="w-1 h-4 rounded-full bg-ops-red"></div>
+          <h3 class="font-display font-semibold text-slate-200" id="alert-modal-title">Send Alert</h3>
+        </div>
+        <button class="modal-close w-7 h-7 rounded-lg flex items-center justify-center hover:bg-slate-800 transition-colors text-slate-400"
+                data-modal="alert-modal">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <!-- Recipient info (read-only) -->
+        <div class="p-3 rounded-xl bg-slate-800 border border-slate-700">
+          <p class="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Recipient</p>
+          <p class="text-sm font-semibold text-slate-200 mt-1" id="alert-recipient-name">—</p>
+          <p class="text-xs font-mono text-slate-400" id="alert-recipient-phone">—</p>
+        </div>
+        <!-- Channel display -->
+        <div class="flex items-center gap-2 p-3 rounded-xl bg-slate-800 border border-slate-700">
+          <div id="alert-channel-icon" class="w-8 h-8 rounded-lg flex items-center justify-center bg-slate-700"></div>
+          <div>
+            <p class="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Channel</p>
+            <p class="text-sm font-mono text-slate-300" id="alert-channel-label">—</p>
+          </div>
+          <span class="ml-auto text-[10px] font-mono text-ops-amber bg-ops-amber/10 border border-ops-amber/30 px-2 py-0.5 rounded">MOCK</span>
+        </div>
+        <!-- Message -->
+        <div>
+          <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">Message</label>
+          <textarea id="alert-message"
+                    rows="4"
+                    class="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono resize-none">
+          </textarea>
+        </div>
+        <!-- Hidden fields -->
+        <input type="hidden" id="alert-channel-value" />
+        <input type="hidden" id="alert-staff-id" />
+      </div>
+      <div class="flex gap-2 px-5 pb-5">
+        <button id="alert-send-btn"
+                class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ops-red hover:bg-red-400 text-white text-sm font-display font-semibold transition-all active:scale-95 shadow-glow-red hover:shadow-none">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/>
+          </svg>
+          Send Alert (Mock)
+        </button>
+        <button class="modal-close px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-display font-semibold transition-all"
+                data-modal="alert-modal">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FEATURE DETAIL MODAL (popup for marker/polygon click) ── -->
+  <div id="feature-detail-modal"
+       class="modal-overlay hidden fixed inset-0 z-[2000] flex items-center justify-center p-4"
+       role="dialog"
+       aria-modal="true">
+    <div class="modal-backdrop absolute inset-0 bg-slate-950/70 backdrop-blur-sm"></div>
+    <div class="modal-content relative w-full max-w-md bg-slate-900 rounded-2xl border border-slate-800 shadow-panel animate-fade-up overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <div class="w-1 h-4 rounded-full" id="feature-modal-accent" style="background:#f97316"></div>
+          <h3 class="font-display font-semibold text-slate-200 truncate max-w-[240px]" id="feature-modal-title">Feature Details</h3>
+        </div>
+        <button class="modal-close w-7 h-7 rounded-lg flex items-center justify-center hover:bg-slate-800 transition-colors text-slate-400"
+                data-modal="feature-detail-modal">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <!-- Type badge + description -->
+      <div class="px-5 pt-4">
+        <div class="flex items-center gap-2 mb-3">
+          <span id="feature-modal-type-badge"
+                class="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30">
+            POINT
+          </span>
+          <span class="text-[10px] font-mono text-slate-500" id="feature-modal-layer-name"></span>
+        </div>
+        <p class="text-sm text-slate-400 mb-3" id="feature-modal-description"></p>
+      </div>
+      <!-- Properties table -->
+      <div class="px-5 pb-5">
+        <div id="feature-modal-props" class="rounded-xl overflow-hidden border border-slate-800 divide-y divide-slate-800">
+          <!-- Rows injected by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       SCRIPTS
+  ====================================================================== -->
+  <!-- Leaflet.js -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet.draw -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <!-- toGeoJSON — KML/KMZ to GeoJSON client-side parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/@mapbox/togeojson@0.16.0/togeojson.js"></script>
+  <!-- JSZip — KMZ decompression in the browser -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Turf.js — area calculation -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <!-- Application -->
+  <script src="/script.js"></script>
+</body>
+</html>
