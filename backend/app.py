@@ -786,16 +786,6 @@ def health():
 
 @app.post("/api/upload", tags=["Layers"])
 async def upload_file(file: UploadFile = File(...)):
-    """
-    Accept a .kml or .kmz file, parse it, return GeoJSON + layer metadata.
-    Stores the layer in memory for later export / proximity checks.
-    """
-    if len(LAYER_STORE) >= MAX_LAYERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum of {MAX_LAYERS} layers reached. Remove a layer first.",
-        )
-
     filename = file.filename or "upload"
     ext      = Path(filename).suffix.lower()
 
@@ -822,14 +812,21 @@ async def upload_file(file: UploadFile = File(...)):
     layer_id = uuid.uuid4().hex[:12]
     layer_name = Path(filename).stem
 
-    LAYER_STORE[layer_id] = {
-        "id":      layer_id,
-        "name":    layer_name,
-        "geojson": geojson,
-    }
+    # Save parsed GeoJSON securely to the SQLite database
+    try:
+        geojson_str = json.dumps(geojson)
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO layers (id, name, geojson) VALUES (?, ?, ?)",
+                (layer_id, layer_name, geojson_str)
+            )
+            conn.commit()
+    except Exception as e:
+        log.exception("Failed to write layer to database")
+        raise HTTPException(status_code=500, detail=f"Database write error: {e}")
 
     feature_count = len(geojson.get("features", []))
-    log.info("Parsed %d features from '%s' → layer %s", feature_count, filename, layer_id)
+    log.info("Parsed %d features from '%s' and saved to DB (layer %s)", feature_count, filename, layer_id)
 
     return {
         "layer_id":      layer_id,
@@ -845,23 +842,50 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/api/layers", tags=["Layers"])
 def list_layers():
-    return [
-        {
-            "id":            lid,
-            "name":          data["name"],
-            "feature_count": len(data["geojson"].get("features", [])),
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT id, name FROM layers").fetchall()
+        return [
+            {
+                "id":   row["id"],
+                "name": row["name"]
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        log.error("Error listing layers: %s", e)
+        return []
+
+
+@app.get("/api/layers/{layer_id}", tags=["Layers"])
+def get_layer_geojson(layer_id: str):
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT name, geojson FROM layers WHERE id = ?", (layer_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Layer not found")
+        return {
+            "id":      layer_id,
+            "name":    row["name"],
+            "geojson": json.loads(row["geojson"])
         }
-        for lid, data in LAYER_STORE.items()
-    ]
+    except Exception as e:
+        log.error("Error loading layer %s: %s", layer_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/layers/{layer_id}", tags=["Layers"])
 def delete_layer(layer_id: str):
-    if layer_id not in LAYER_STORE:
-        raise HTTPException(status_code=404, detail="Layer not found.")
-    del LAYER_STORE[layer_id]
-    return {"deleted": layer_id}
-
+    try:
+        with get_db() as conn:
+            cur = conn.execute("DELETE FROM layers WHERE id = ?", (layer_id,))
+            conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Layer not found.")
+        return {"deleted": layer_id}
+    except Exception as e:
+        log.error("Error deleting layer %s: %s", layer_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
 # Export
