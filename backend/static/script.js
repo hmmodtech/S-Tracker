@@ -1000,4 +1000,1008 @@ function openLayerStyleModal(id) {
   document.getElementById('style-fill-hex').textContent   = layer.style.fillColor || '#f97316';
   document.getElementById('style-weight').value           = layer.style.weight || 2;
   document.getElementById('style-weight-val').textContent = (layer.style.weight || 2) + 'px';
-  document.getElementById('style-f
+  document.getElementById('style-fill-opacity').value     = layer.style.fillOpacity || 0.35;
+  document.getElementById('style-fill-opacity-val').textContent = (layer.style.fillOpacity || 0.35).toFixed(2);
+  document.getElementById('style-layer-opacity').value    = layer.style.opacity || 1;
+  document.getElementById('style-layer-opacity-val').textContent = (layer.style.opacity || 1).toFixed(2);
+  openModal('layer-style-modal');
+}
+
+function initStyleModal() {
+  ['style-stroke-color','style-fill-color'].forEach(id => {
+    document.getElementById(id).addEventListener('input', function() {
+      const hexId = id === 'style-stroke-color' ? 'style-stroke-hex' : 'style-fill-hex';
+      document.getElementById(hexId).textContent = this.value;
+    });
+  });
+  document.getElementById('style-weight').addEventListener('input', function() {
+    document.getElementById('style-weight-val').textContent = this.value + 'px';
+  });
+  document.getElementById('style-fill-opacity').addEventListener('input', function() {
+    document.getElementById('style-fill-opacity-val').textContent = parseFloat(this.value).toFixed(2);
+  });
+  document.getElementById('style-layer-opacity').addEventListener('input', function() {
+    document.getElementById('style-layer-opacity-val').textContent = parseFloat(this.value).toFixed(2);
+  });
+
+  document.getElementById('style-apply-btn').addEventListener('click', () => {
+    const id = document.getElementById('style-modal-layer-id').value;
+    applyLayerStyle(id, {
+      color:       document.getElementById('style-stroke-color').value,
+      fillColor:   document.getElementById('style-fill-color').value,
+      weight:      parseInt(document.getElementById('style-weight').value),
+      fillOpacity: parseFloat(document.getElementById('style-fill-opacity').value),
+      opacity:     parseFloat(document.getElementById('style-layer-opacity').value),
+    });
+    closeModal('layer-style-modal');
+    toast('Layer style updated.', 'success');
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// 12. DRAWING TOOLS
+// ════════════════════════════════════════════════════════════
+
+function initDrawTools() {
+  document.querySelectorAll('.draw-btn').forEach(btn => {
+    btn.addEventListener('click', () => activateDrawTool(btn));
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') deactivateAllDrawTools();
+  });
+}
+
+// ── Database Saved Settings Logic ─────────────────────────
+async function saveSetting(key, value) {
+  localStorage.setItem('wm_' + key, value);
+  try {
+    await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'wm_' + key, value: String(value) })
+    });
+  } catch (e) {
+    console.warn(`Local save only for setting: ${key}. Server offline.`);
+  }
+}
+
+async function loadSavedSettings() {
+  let dbSettings = {};
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    dbSettings = await res.json();
+  } catch (e) {
+    console.warn("Could not retrieve settings from SQLite DB. Restoring local values.");
+  }
+
+  const settings = {};
+  for (let key in localStorage) {
+    if (key.startsWith('wm_')) {
+      settings[key] = localStorage.getItem(key);
+    }
+  }
+  Object.assign(settings, dbSettings);
+
+  if (settings.wm_theme) {
+    applyTheme(settings.wm_theme === 'dark');
+  }
+  if (settings.wm_tile) {
+    setTileLayer(settings.wm_tile);
+  }
+  if (settings.wm_radius) {
+    const r = parseInt(settings.wm_radius);
+    document.getElementById('incident-radius').value = r;
+    document.getElementById('radius-value-display').textContent = fmtDist(r);
+  }
+  if (settings.wm_severity) {
+    const radio = document.querySelector(`input[name="severity"][value="${settings.wm_severity}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (settings.wm_incident_lat && settings.wm_incident_lng) {
+    const lat = parseFloat(settings.wm_incident_lat);
+    const lng = parseFloat(settings.wm_incident_lng);
+    document.getElementById('incident-lat').value = lat.toFixed(6);
+    document.getElementById('incident-lng').value = lng.toFixed(6);
+    updateIncidentCircle();
+  }
+}
+
+async function loadSavedLayers() {
+  try {
+    const res = await fetch(`${API}/api/layers`);
+    if (!res.ok) return;
+    const layersMeta = await res.json();
+    
+    for (const meta of layersMeta) {
+      const layerRes = await fetch(`${API}/api/layers/${meta.id}`);
+      if (!layerRes.ok) continue;
+      const layerData = await layerRes.json();
+      
+      const color = LAYER_COLORS[colorIndex % LAYER_COLORS.length];
+      colorIndex++;
+
+      addLayer(meta.id, {
+        name:  layerData.name,
+        color: color,
+        file:  layerData.name,
+      }, layerData.geojson, false);
+    }
+  } catch (e) {
+    console.error("Error auto-loading database layers:", e);
+  }
+}
+
+function activateDrawTool(btn) {
+  const tool = btn.dataset.draw;
+  deactivateAllDrawTools();
+
+  if (State.activeDrawTool === tool) return;
+
+  State.activeDrawTool = tool;
+  btn.classList.add('active');
+  showDrawModeIndicator(tool);
+
+  const map = State.map;
+  const ctrl = State.drawControl;
+
+  const toolMap = {
+    marker:   () => new L.Draw.Marker(map, ctrl.options.draw.marker),
+    polyline: () => new L.Draw.Polyline(map, ctrl.options.draw.polyline),
+    polygon:  () => new L.Draw.Polygon(map, ctrl.options.draw.polygon),
+    circle:   () => new L.Draw.Circle(map, ctrl.options.draw.circle),
+    edit:     () => new L.EditToolbar.Edit(map, { featureGroup: State.drawnItems }),
+    delete:   () => new L.EditToolbar.Delete(map, { featureGroup: State.drawnItems }),
+  };
+
+  const handler = toolMap[tool]?.();
+  if (handler) handler.enable();
+}
+
+function deactivateAllDrawTools() {
+  State.activeDrawTool = null;
+  document.querySelectorAll('.draw-btn').forEach(b => b.classList.remove('active'));
+  hideDrawModeIndicator();
+}
+
+function showDrawModeIndicator(tool) {
+  const labels = {
+    marker:   'Marker mode — click to place',
+    polyline: 'Path mode — click points, double-click to finish',
+    polygon:  'Zone mode — click points, double-click to finish',
+    circle:   'Radius mode — click and drag',
+    edit:     'Edit mode — drag handles to reshape',
+    delete:   'Delete mode — click features to remove',
+  };
+  document.getElementById('draw-mode-label').textContent = labels[tool] || 'Drawing active';
+  document.getElementById('draw-mode-indicator').classList.remove('hidden');
+}
+function hideDrawModeIndicator() {
+  document.getElementById('draw-mode-indicator').classList.add('hidden');
+}
+
+function onDrawCreated(e) {
+  const layer = e.layer;
+  State.drawnItems.addLayer(layer);
+  deactivateAllDrawTools();
+
+  if (e.layerType === 'polyline') {
+    const latlngs = layer.getLatLngs();
+    let total = 0;
+    for (let i = 0; i < latlngs.length - 1; i++) {
+      total += latlngs[i].distanceTo(latlngs[i+1]);
+    }
+    showMeasurementHUD(total, null);
+  } else if (e.layerType === 'polygon') {
+    const geom   = layer.toGeoJSON();
+    const areaSM = turf.area(geom);
+    showMeasurementHUD(null, areaSM);
+  } else if (e.layerType === 'circle') {
+    const r = layer.getRadius();
+    showMeasurementHUD(null, Math.PI * r * r);
+  }
+}
+
+function onDrawEdited()  { }
+function onDrawDeleted() { hideMeasurementHUD(); }
+
+// ════════════════════════════════════════════════════════════
+// 13. MEASUREMENT HUD
+// ════════════════════════════════════════════════════════════
+
+function showMeasurementHUD(distM, areaM2) {
+  document.getElementById('meas-distance').textContent = distM  ? fmtDist(distM)  : '—';
+  document.getElementById('meas-area').textContent     = areaM2 ? fmtArea(areaM2) : '—';
+  document.getElementById('measurement-hud').classList.remove('hidden');
+}
+function hideMeasurementHUD() {
+  document.getElementById('measurement-hud').classList.add('hidden');
+}
+function initMeasurementHUD() {
+  document.getElementById('measurement-close').addEventListener('click', hideMeasurementHUD);
+}
+
+// ════════════════════════════════════════════════════════════
+// 14. INCIDENT FORM & PLACEMENT MODE
+// ════════════════════════════════════════════════════════════
+
+function initIncidentForm() {
+  const radiusSlider  = document.getElementById('incident-radius');
+  const radiusDisplay = document.getElementById('radius-value-display');
+  radiusSlider.addEventListener('input', () => {
+    const v = parseInt(radiusSlider.value);
+    radiusDisplay.textContent = fmtDist(v);
+    updateIncidentCircle();
+  });
+  radiusSlider.addEventListener('change', () => {
+    saveSetting('radius', radiusSlider.value);
+  });
+
+  ['incident-lat','incident-lng'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateIncidentCircle);
+    document.getElementById(id).addEventListener('change', function() {
+      const key = id === 'incident-lat' ? 'incident_lat' : 'incident_lng';
+      saveSetting(key, parseFloat(this.value));
+    });
+  });
+
+  document.getElementById('btn-log-incident').addEventListener('click', logIncident);
+  document.getElementById('btn-run-proximity').addEventListener('click', runProximityScan);
+  document.getElementById('btn-place-incident-mode').addEventListener('click', enterIncidentPlacementMode);
+}
+
+function enterIncidentPlacementMode() {
+  State.placingIncident = true;
+  document.body.classList.add('placing-incident');
+  document.getElementById('incident-place-mode-indicator').classList.remove('hidden');
+  toast('Click on the map to set the incident location.', 'info', 3000);
+}
+
+function exitIncidentPlacementMode() {
+  State.placingIncident = false;
+  document.body.classList.remove('placing-incident');
+  document.getElementById('incident-place-mode-indicator').classList.add('hidden');
+}
+
+function onMapClick(e) {
+  if (State.placingIncident) {
+    const { lat, lng } = e.latlng;
+    document.getElementById('incident-lat').value = lat.toFixed(6);
+    document.getElementById('incident-lng').value = lng.toFixed(6);
+    saveSetting('incident_lat', lat);
+    saveSetting('incident_lng', lng);
+    exitIncidentPlacementMode();
+    placeIncidentMarker(lat, lng);
+    updateIncidentCircle();
+    toast(`Incident placed at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'success', 2500);
+  }
+}
+
+function placeIncidentMarker(lat, lng) {
+  if (State.incidentMarker) State.map.removeLayer(State.incidentMarker);
+  State.incidentMarker = L.marker([lat, lng], { icon: createIncidentIcon(), zIndexOffset: 1000 })
+    .addTo(State.map)
+    .bindPopup(`<div class="wm-popup wm-popup-incident">
+      <div class="wm-popup-header">
+        <span class="wm-popup-title">⚠ Incident Location</span>
+        <span class="wm-popup-type">INCIDENT</span>
+      </div>
+      <div class="wm-popup-props">
+        <div class="wm-popup-row"><span class="wm-popup-key">Lat</span><span class="wm-popup-val">${lat.toFixed(6)}</span></div>
+        <div class="wm-popup-row"><span class="wm-popup-key">Lng</span><span class="wm-popup-val">${lng.toFixed(6)}</span></div>
+      </div>
+    </div>`);
+}
+
+function updateIncidentCircle() {
+  const lat = parseFloat(document.getElementById('incident-lat').value);
+  const lng = parseFloat(document.getElementById('incident-lng').value);
+  const r   = parseInt(document.getElementById('incident-radius').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
+  State.incidentCircle = L.circle([lat, lng], {
+    radius:      r,
+    className:   'incident-radius-circle',
+    color:       '#ef4444',
+    fillColor:   '#ef4444',
+    fillOpacity: 0.06,
+    weight:      1.5,
+    dashArray:   '6 4',
+  }).addTo(State.map);
+  placeIncidentMarker(lat, lng);
+}
+
+async function logIncident() {
+  const lat   = parseFloat(document.getElementById('incident-lat').value);
+  const lng   = parseFloat(document.getElementById('incident-lng').value);
+  const title = document.getElementById('incident-title').value.trim() || 'Untitled Incident';
+  const desc  = document.getElementById('incident-description').value.trim();
+  const sev   = document.querySelector('input[name="severity"]:checked')?.value || 'medium';
+
+  if (isNaN(lat) || isNaN(lng)) {
+    toast('Please enter valid coordinates or click the map first.', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('btn-log-incident');
+  btn.disabled = true;
+  btn.textContent = 'Logging…';
+
+  try {
+    const res = await fetch(`${API}/api/incidents`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description: desc, severity: sev, lat, lng }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    State.incidents.push({ id: data.id, title, lat, lng, severity: sev });
+    updateStatusBar();
+    toast(`Incident "${title}" logged.`, 'success');
+  } catch {
+    State.incidents.push({ id: uid(), title, lat, lng, severity: sev });
+    toast(`Incident "${title}" logged (offline mode).`, 'info');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg> Log Incident`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// 15. PROXIMITY SCAN (Haversine + PIP)
+// ════════════════════════════════════════════════════════════
+
+function runProximityScan() {
+  const lat    = parseFloat(document.getElementById('incident-lat').value);
+  const lng    = parseFloat(document.getElementById('incident-lng').value);
+  const radius = parseInt(document.getElementById('incident-radius').value);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    toast('Set incident coordinates first.', 'warning');
+    return;
+  }
+  if (!Object.keys(State.layers).length) {
+    toast('Load at least one staff layer first.', 'warning');
+    return;
+  }
+
+  const staffList = [];
+  for (const [layerId, layer] of Object.entries(State.layers)) {
+    const features = layer.geojson?.features || [];
+    features.forEach(f => {
+      if (f.geometry?.type !== 'Point') return;
+      const [fLng, fLat] = f.geometry.coordinates;
+      const props = f.properties || {};
+      staffList.push({
+        id:         uid(),
+        name:       props.name || props.Name || 'Unnamed',
+        department: props.Department || props.department || props.dept || '',
+        phone:      props.Phone || props.phone || props.tel || '',
+        telegram:   props.Telegram || props.telegram || props.tg || '',
+        lat:        fLat,
+        lng:        fLng,
+        layerName:  layer.meta.name,
+        layerColor: layer.style?.color || '#f97316',
+      });
+    });
+  }
+
+  if (!staffList.length) {
+    toast('No Point features found in loaded layers. Import a staff CSV or KML.', 'warning');
+    return;
+  }
+
+  let nearestDistance = Infinity;
+  const results = staffList.map(staff => {
+    const distM = haversine(lat, lng, staff.lat, staff.lng);
+    let status;
+    if (distM <= 250)    status = 'critical';
+    else if (distM <= 500)   status = 'high';
+    else if (distM <= radius) status = 'medium';
+    else                     status = 'safe';
+
+    if (status !== 'safe' && distM < nearestDistance) {
+      nearestDistance = distM;
+    }
+
+    return { ...staff, distance_m: distM, status };
+  });
+
+  results.sort((a, b) => a.distance_m - b.distance_m);
+
+  State.staffResults = results;
+  renderStaffPanel(results);
+
+  const endangered = results.filter(r => r.status !== 'safe');
+  if (endangered.length) {
+    document.getElementById('status-risk-badge').classList.remove('hidden');
+    toast(`⚠ ${endangered.length} staff within danger zone!`, 'error');
+  } else {
+    document.getElementById('status-risk-badge').classList.add('hidden');
+    toast(`All ${results.length} staff members are outside the danger zone.`, 'success');
+  }
+
+  addIncidentPulsingCircle(lat, lng, nearestDistance);
+  flashAtRiskMarkers(lat, lng, radius);
+}
+
+function addIncidentPulsingCircle(lat, lng, nearestDistance) {
+  let pulseClass = 'pulse-green';
+  if (nearestDistance <= 250) {
+    pulseClass = 'pulse-red';
+  } else if (nearestDistance <= 500) {
+    pulseClass = 'pulse-orange';
+  } else if (nearestDistance <= 1000) {
+    pulseClass = 'pulse-yellow';
+  } else {
+    pulseClass = 'pulse-green';
+  }
+
+  const pulsingIcon = L.divIcon({
+    className: `pulsing-marker ${pulseClass}`,
+    html: '<div class="pulsing-ring"></div><div class="pulsing-dot"></div>',
+    iconSize: [48, 48],
+    iconAnchor: [24, 24]
+  });
+
+  if (window.pulsingIncidentMarker) {
+    State.map.removeLayer(window.pulsingIncidentMarker);
+  }
+
+  window.pulsingIncidentMarker = L.marker([lat, lng], { icon: pulsingIcon }).addTo(State.map);
+}
+
+function flashAtRiskMarkers(incLat, incLng, radiusM) {
+  const endangered = State.staffResults.filter(r => r.status !== 'safe');
+  if (!endangered.length) return;
+
+  endangered.forEach((staff, i) => {
+    setTimeout(() => {
+      const circle = L.circleMarker([staff.lat, staff.lng], {
+        radius:      10,
+        color:       '#ef4444',
+        fillColor:   '#ef4444',
+        fillOpacity: 0.5,
+        weight:      2,
+      }).addTo(State.map);
+      setTimeout(() => State.map.removeLayer(circle), 2000);
+    }, i * 120);
+  });
+
+  const points = endangered.map(s => [s.lat, s.lng]);
+  points.push([incLat, incLng]);
+  const bounds = L.latLngBounds(points);
+  State.map.fitBounds(bounds.pad(0.25), { animate: true });
+}
+
+// ════════════════════════════════════════════════════════════
+// 16. AT-RISK STAFF PANEL
+// ════════════════════════════════════════════════════════════
+
+function renderStaffPanel(results) {
+  const list       = document.getElementById('staff-results-list');
+  const emptyState = document.getElementById('staff-empty-state');
+  const countBadge = document.getElementById('at-risk-count-badge');
+  const alertAll   = document.getElementById('btn-alert-all');
+  const filter     = State.staffFilter;
+
+  const filtered = filter === 'all'
+    ? results
+    : results.filter(r => r.status === filter);
+
+  const endangered = results.filter(r => r.status !== 'safe');
+
+  if (endangered.length) {
+    countBadge.textContent = endangered.length;
+    countBadge.classList.remove('hidden');
+    alertAll.classList.remove('hidden');
+  } else {
+    countBadge.classList.add('hidden');
+    alertAll.classList.add('hidden');
+  }
+
+  if (!filtered.length) {
+    emptyState.style.display = 'flex';
+    list.querySelectorAll('.staff-card').forEach(e => e.remove());
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  list.querySelectorAll('.staff-card').forEach(e => e.remove());
+  filtered.forEach((staff, i) => {
+    const card = buildStaffCard(staff, i);
+    list.insertAdjacentHTML('beforeend', card);
+  });
+}
+
+function buildStaffCard(staff, index) {
+  const statusLabels = {
+    inside:   '🔴 INSIDE ZONE',
+    critical: '🔴 CRITICAL',
+    high:     '🟠 HIGH RISK',
+    medium:   '🟡 MEDIUM',
+    safe:     '🟢 SAFE',
+  };
+  const label = statusLabels[staff.status] || staff.status.toUpperCase();
+
+  return `<div class="staff-card" data-status="${staff.status}" data-id="${staff.id}"
+               style="animation-delay:${index * 50}ms">
+    <div class="staff-status-bar"></div>
+    <div class="staff-card-body">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="staff-name truncate">${esc(staff.name)}</p>
+          ${staff.department ? `<p class="staff-dept">${esc(staff.department)}</p>` : ''}
+          ${staff.layerName  ? `<p class="text-[9px] font-mono text-slate-600 mt-0.5">${esc(staff.layerName)}</p>` : ''}
+        </div>
+        <div class="text-right flex-none">
+          <p class="staff-distance">${fmtDist(staff.distance_m)}</p>
+          <p class="text-[9px] font-mono text-slate-500 mt-0.5">${label}</p>
+        </div>
+      </div>
+      <button onclick="flyToStaff(${staff.lat},${staff.lng})"
+              class="mt-2 w-full text-[10px] font-mono text-slate-500 hover:text-brand-300 flex items-center gap-1.5 transition-colors">
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+        </svg>
+        ${staff.lat.toFixed(5)}, ${staff.lng.toFixed(5)}
+      </button>
+    </div>
+    <div class="staff-alert-actions">
+      <button class="alert-btn sms"
+              onclick="openAlertModal('${staff.id}','sms','${esc(staff.name)}','${esc(staff.phone)}',${staff.distance_m.toFixed(0)})"
+              title="Send SMS">
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 0h3m-3 8.25h3m-3 3.75h3"/>
+        </svg>
+        SMS
+      </button>
+      <button class="alert-btn whatsapp"
+              onclick="openAlertModal('${staff.id}','whatsapp','${esc(staff.name)}','${esc(staff.phone)}',${staff.distance_m.toFixed(0)})"
+              title="Send WhatsApp">
+        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+        </svg>
+        WA
+      </button>
+      <button class="alert-btn telegram"
+              onclick="openAlertModal('${staff.id}','telegram','${esc(staff.name)}','${esc(staff.telegram || staff.phone)}',${staff.distance_m.toFixed(0)})"
+              title="Send Telegram">
+        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
+        </svg>
+        TG
+      </button>
+    </div>
+  </div>`;
+}
+
+window.flyToStaff = (lat, lng) => State.map.setView([lat, lng], 16, { animate: true });
+
+function initStaffFilters() {
+  document.querySelectorAll('.staff-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.staff-filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      State.staffFilter = btn.dataset.filter;
+      renderStaffPanel(State.staffResults);
+    });
+  });
+
+  document.getElementById('btn-alert-all').addEventListener('click', () => {
+    const endangered = State.staffResults.filter(r => r.status !== 'safe');
+    if (!endangered.length) return;
+    endangered.forEach(staff => {
+      const ch = staff.phone ? 'whatsapp' : 'telegram';
+      sendMockAlert(ch, staff.phone || staff.telegram, buildAlertMessage(staff.name, staff.distance_m), '');
+    });
+    toast(`Mock alerts sent to ${endangered.length} staff members.`, 'success');
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// 17. ALERT MODAL & SEND
+// ════════════════════════════════════════════════════════════
+
+function buildAlertMessage(name, distM) {
+  const incident = document.getElementById('incident-title').value.trim() || 'Security Incident';
+  return `⚠ SAFETY ALERT: An incident (${incident}) has occurred ${Math.round(distM)}m from your location. Please follow evacuation procedures immediately. Stay safe. — WatchMe Security Dashboard`;
+}
+
+const CHANNEL_ICONS = {
+  sms:      { color: '#22c55e', icon: '📱', label: 'SMS' },
+  whatsapp: { color: '#22c55e', icon: '💬', label: 'WhatsApp' },
+  telegram: { color: '#3b82f6', icon: '✈️', label: 'Telegram' },
+};
+
+window.openAlertModal = function(staffId, channel, name, phone, distM) {
+  document.getElementById('alert-staff-id').value    = staffId;
+  document.getElementById('alert-channel-value').value = channel;
+  document.getElementById('alert-recipient-name').textContent = name;
+  document.getElementById('alert-recipient-phone').textContent = phone || 'No contact info';
+  document.getElementById('alert-modal-title').textContent = `Send ${CHANNEL_ICONS[channel]?.label || channel} Alert`;
+  document.getElementById('alert-message').value = buildAlertMessage(name, distM);
+
+  const iconDiv = document.getElementById('alert-channel-icon');
+  const ch      = CHANNEL_ICONS[channel] || CHANNEL_ICONS.sms;
+  iconDiv.innerHTML = `<span style="font-size:18px">${ch.icon}</span>`;
+  document.getElementById('alert-channel-label').textContent = ch.label;
+
+  openModal('alert-modal');
+};
+
+function initAlertModal() {
+  document.getElementById('alert-send-btn').addEventListener('click', async () => {
+    const channel   = document.getElementById('alert-channel-value').value;
+    const recipient = document.getElementById('alert-recipient-phone').textContent;
+    const message   = document.getElementById('alert-message').value;
+    const btn       = document.getElementById('alert-send-btn');
+
+    if (!recipient || recipient === 'No contact info') {
+      toast('No contact information available for this staff member.', 'warning');
+      return;
+    }
+
+    btn.disabled    = true;
+    btn.textContent = 'Sending…';
+
+    await sendMockAlert(channel, recipient, message, '');
+
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg> Send Alert (Mock)`;
+
+    closeModal('alert-modal');
+  });
+}
+
+async function sendMockAlert(channel, recipient, message, incidentId) {
+  try {
+    const res = await fetch(`${API}/api/alert/${channel}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, recipient, message, incident_id: incidentId }),
+    });
+    const data = await res.json();
+    toast(`Mock ${channel.toUpperCase()} sent to ${recipient}`, 'success');
+    console.info('Alert response:', data);
+  } catch {
+    toast(`Mock ${channel.toUpperCase()} queued (offline mode) for ${recipient}`, 'info');
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// 18. EXPORT
+// ════════════════════════════════════════════════════════════
+
+function initExport() {
+  document.getElementById('btn-export-kml').addEventListener('click', () => exportMap('kml'));
+  document.getElementById('btn-export-kmz').addEventListener('click', () => exportMap('kmz'));
+}
+
+async function exportMap(format) {
+  const allFeatures = [];
+
+  Object.values(State.layers).forEach(layer => {
+    if (layer.visible) {
+      (layer.geojson?.features || []).forEach(f => allFeatures.push(f));
+    }
+  });
+
+  State.drawnItems.eachLayer(layer => {
+    try { allFeatures.push(layer.toGeoJSON()); } catch {}
+  });
+
+  if (!allFeatures.length) {
+    toast('No visible features to export.', 'warning');
+    return;
+  }
+
+  const fc = { type: 'FeatureCollection', features: allFeatures };
+
+  try {
+    const res = await fetch(`${API}/api/export`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        feature_collection: fc,
+        doc_name: 'WatchMe Security Export',
+        format,
+      }),
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+
+    const blob     = await res.blob();
+    const url      = URL.createObjectURL(blob);
+    const anchor   = document.createElement('a');
+    anchor.href     = url;
+    anchor.download = `watchme-export.${format}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${allFeatures.length} features as .${format.toUpperCase()}`, 'success');
+  } catch {
+    exportKMLClientSide(fc, format);
+  }
+}
+
+function exportKMLClientSide(fc, format) {
+  const kml = buildKMLString(fc);
+  const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `watchme-export.kml`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${fc.features.length} features as KML (client-side).`, 'success');
+}
+
+function buildKMLString(fc) {
+  const placemarks = fc.features.map(f => {
+    const props = f.properties || {};
+    const name  = props.name || props.Name || 'Feature';
+    const desc  = props.description || '';
+    let geomKML = '';
+
+    const geom = f.geometry || {};
+    if (geom.type === 'Point') {
+      const [lon, lat] = geom.coordinates;
+      geomKML = `<Point><coordinates>${lon},${lat},0</coordinates></Point>`;
+    } else if (geom.type === 'LineString') {
+      const coords = geom.coordinates.map(c => `${c[0]},${c[1]},0`).join(' ');
+      geomKML = `<LineString><tessellate>1</tessellate><coordinates>${coords}</coordinates></LineString>`;
+    } else if (geom.type === 'Polygon') {
+      const outer = geom.coordinates[0].map(c => `${c[0]},${c[1]},0`).join(' ');
+      geomKML = `<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>${outer}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
+    }
+
+    const skip = new Set(['name','Name','description','Description','_style']);
+    const extData = Object.entries(props)
+      .filter(([k,v]) => !skip.has(k) && v !== '')
+      .map(([k,v]) => `<Data name="${k.replace(/"/g,'')}""><value>${String(v).replace(/</g,'&lt;')}</value></Data>`)
+      .join('');
+
+    return `<Placemark>
+      <name>${name.replace(/</g,'&lt;')}</name>
+      <description>${desc.replace(/</g,'&lt;')}</description>
+      ${extData ? `<ExtendedData>${extData}</ExtendedData>` : ''}
+      ${geomKML}
+    </Placemark>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>WatchMe Security Dashboard Export</name>
+    ${placemarks}
+  </Document>
+</kml>`;
+}
+
+// ════════════════════════════════════════════════════════════
+// 19. STATUS BAR CLOCK
+// ════════════════════════════════════════════════════════════
+
+function updateStatusBar() {
+  document.getElementById('status-layer-count').textContent =
+    `${Object.keys(State.layers).length} layers`;
+  document.getElementById('status-incident-count').textContent =
+    `${State.incidents.length} incidents`;
+}
+
+function startClock() {
+  function tick() {
+    const now = new Date();
+    document.getElementById('status-time').textContent =
+      now.toUTCString().slice(17, 22) + ' UTC';
+  }
+  tick();
+  setInterval(tick, 30000);
+}
+
+// ════════════════════════════════════════════════════════════
+// 20. MODAL CLOSE BINDINGS
+// ════════════════════════════════════════════════════════════
+
+function initModals() {
+  document.querySelectorAll('.modal-close').forEach(btn => {
+    btn.addEventListener('click', () => closeModal(btn.dataset.modal));
+  });
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.classList.contains('modal-backdrop')) {
+        closeModal(overlay.id);
+      }
+    });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => closeModal(m.id));
+      exitIncidentPlacementMode();
+    }
+  });
+}
+
+// ── Collapsible Right-side Proximity panel bindings ──────
+function initProximityPanel() {
+  const toggleBtn = document.getElementById('proximity-toggle-btn');
+  const panel     = document.getElementById('proximity-panel');
+  const closeBtn  = document.getElementById('proximity-panel-close');
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isClosed = panel.classList.contains('hidden');
+    if (isClosed) {
+      openProximityPanel();
+    } else {
+      closeProximityPanel();
+    }
+  });
+
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeProximityPanel();
+  });
+  
+  State.map.on('click', () => {
+    if (!State.placingIncident) {
+      closeProximityPanel();
+    }
+  });
+}
+
+function openProximityPanel() {
+  const panel = document.getElementById('proximity-panel');
+  panel.classList.remove('hidden');
+  setTimeout(() => {
+    panel.classList.remove('translate-x-[380px]', 'opacity-0');
+    panel.classList.add('translate-x-0', 'opacity-100');
+  }, 50);
+}
+
+function closeProximityPanel() {
+  const panel = document.getElementById('proximity-panel');
+  panel.classList.remove('translate-x-0', 'opacity-100');
+  panel.classList.add('translate-x-[380px]', 'opacity-0');
+  setTimeout(() => {
+    panel.classList.add('hidden');
+  }, 300);
+}
+
+// ── Custom Right-Click Context Menu setup on the Leaflet Map ──
+function initMapContextMenu() {
+  State.map.on('contextmenu', (e) => {
+    if (e.originalEvent) {
+      e.originalEvent.preventDefault();
+    }
+
+    const oldMenu = document.getElementById('map-context-menu');
+    if (oldMenu) oldMenu.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'map-context-menu';
+    menu.className = 'absolute z-[9999] semi-transparent-glass shadow-panel rounded-xl py-1 w-48 text-xs text-slate-800 dark:text-slate-200 transition-all duration-150 animate-fade-up';
+    
+    menu.style.left = e.originalEvent.pageX + 'px';
+    menu.style.top  = e.originalEvent.pageY + 'px';
+
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+
+    const options = [
+      {
+        text: '📍 Place Incident Here',
+        action: () => {
+          document.getElementById('incident-lat').value = lat.toFixed(6);
+          document.getElementById('incident-lng').value = lng.toFixed(6);
+          saveSetting('incident_lat', lat);
+          saveSetting('incident_lng', lng);
+          
+          updateIncidentCircle();
+          openProximityPanel();
+          runProximityScan();
+        }
+      },
+      {
+        text: '📌 Add Custom Marker',
+        action: () => {
+          const label = prompt("Enter marker name:", "Assessment Point");
+          if (label !== null) {
+            L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
+              .addTo(State.drawnItems)
+              .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
+              .openPopup();
+          }
+        }
+      },
+      {
+        text: '📋 Copy Coordinates',
+        action: () => {
+          const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+          navigator.clipboard.writeText(coords).then(() => {
+            toast('Coordinates copied to clipboard!', 'success');
+          });
+        }
+      },
+      {
+        text: '❌ Clear Map Scans',
+        action: () => {
+          if (State.incidentMarker) State.map.removeLayer(State.incidentMarker);
+          if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
+          if (window.pulsingIncidentMarker) State.map.removeLayer(window.pulsingIncidentMarker);
+          State.drawnItems.clearLayers();
+          hideMeasurementHUD();
+          toast('Cleared scans and layers.', 'info');
+        }
+      }
+    ];
+
+    options.forEach(opt => {
+      const item = document.createElement('div');
+      item.className = 'px-3 py-2 hover:bg-white/10 dark:hover:bg-white/5 cursor-pointer flex items-center transition-colors font-mono font-semibold';
+      item.innerHTML = opt.text;
+      item.onclick = (event) => {
+        event.stopPropagation();
+        opt.action();
+        menu.remove();
+      };
+      menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+
+    const closeMenu = () => {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 50);
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// BOOTSTRAP — DOMContentLoaded
+// ════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+  runLoadingScreen();
+  initTheme();
+  initMap();
+  initTileSwitcher();
+  initSidebar();
+  initSearch();
+  initUpload();
+  initToggleAllLayers();
+  initStyleModal();
+  initDrawTools();
+  initMeasurementHUD();
+  initIncidentForm();
+  initStaffFilters();
+  initAlertModal();
+  initExport();
+  initModals();
+  initProximityPanel();
+  startClock();
+  updateStatusBar();
+
+  loadSavedSettings();
+  loadSavedLayers();
+
+  document.getElementById('dark-mode-toggle').addEventListener('click', () => {
+    applyTheme(!State.darkMode);
+  });
+
+  document.querySelectorAll('input[name="severity"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      saveSetting('severity', radio.value);
+    });
+  });
+
+  const medRadio = document.querySelector('input[name="severity"][value="medium"]');
+  if (medRadio && !localStorage.getItem('wm_severity')) medRadio.checked = true;
+
+  fetch(`${API}/api/health`)
+    .then(r => r.json())
+    .then(d => console.info('Backend:', d.status, '| Layers in store:', d.layers))
+    .catch(() => console.info('Backend offline — running in client-only mode'));
+});
