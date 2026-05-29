@@ -2083,6 +2083,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Load Saved DB/Local Settings
   loadSavedSettings();
+  
+  // Load Saved Layers from DB on page refresh
+  loadSavedLayers();
 
   // Theme toggle button
   document.getElementById('dark-mode-toggle').addEventListener('click', () => {
