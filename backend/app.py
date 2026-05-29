@@ -68,7 +68,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# SQLite — incident log (lightweight, survives Render restarts on disk)
+# SQLite — database connection and schema initialization
 # ---------------------------------------------------------------------------
 
 def get_db() -> sqlite3.Connection:
@@ -81,6 +81,11 @@ def init_db() -> None:
     with get_db() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS incidents (
                 id          TEXT PRIMARY KEY,
                 title       TEXT NOT NULL,
@@ -747,6 +752,11 @@ class ExportRequest(BaseModel):
     format:             str  = "kml"   # "kml" or "kmz"
 
 
+class SettingItem(BaseModel):
+    key: str
+    value: str
+
+
 # ===========================================================================
 # API ROUTES
 # ===========================================================================
@@ -884,6 +894,40 @@ def export_layers(req: ExportRequest):
             "Content-Length":      str(len(body)),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Settings (SQLite Persistence)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/settings", tags=["Settings"])
+def get_settings():
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+    except Exception as e:
+        log.warning("Could not load settings from database: %s", e)
+        return {}
+
+
+@app.post("/api/settings", tags=["Settings"])
+def save_setting(item: SettingItem):
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (item.key, item.value),
+            )
+            conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        log.exception("Could not save setting %s: %s", item.key, e)
+        raise HTTPException(status_code=500, detail=f"Database write error: {e}")
 
 
 # ---------------------------------------------------------------------------
