@@ -760,7 +760,7 @@ function removeUploadProgress(filename) {
 // 11. LAYER MANAGEMENT
 // ════════════════════════════════════════════════════════════
 
-function addLayer(id, meta, geojson) {
+function addLayer(id, meta, geojson, autoFit = true) {
   const color        = meta.color || LAYER_COLORS[0];
   const layerStyle   = { color, fillColor: color, weight: 2, fillOpacity: 0.18, opacity: 1 };
   const leafletGroup = buildLeafletGroup(id, geojson, layerStyle);
@@ -771,11 +771,13 @@ function addLayer(id, meta, geojson) {
   updateLayerCountBadge();
   updateStatusBar();
 
-  // Auto-fit to new layer
-  try {
-    const bounds = leafletGroup.getBounds();
-    if (bounds.isValid()) State.map.fitBounds(bounds.pad(0.15), { maxZoom: 15 });
-  } catch { /* empty group */ }
+  // Auto-fit to new layer only if autoFit is true
+  if (autoFit) {
+    try {
+      const bounds = leafletGroup.getBounds();
+      if (bounds.isValid()) State.map.fitBounds(bounds.pad(0.15), { maxZoom: 15 });
+    } catch { /* empty group */ }
+  }
 }
 
 function buildLeafletGroup(layerId, geojson, style) {
@@ -2029,7 +2031,31 @@ function initMapContextMenu() {
     setTimeout(() => document.addEventListener('click', closeMenu), 50);
   });
 }
+async function loadSavedLayers() {
+  try {
+    const res = await fetch('/api/layers');
+    const layersMeta = await res.json();
+    
+    for (const meta of layersMeta) {
+      // Fetch the full GeoJSON for each saved layer
+      const layerRes = await fetch(`/api/layers/${meta.id}`);
+      if (!layerRes.ok) continue;
+      const layerData = await layerRes.json();
+      
+      const color = LAYER_COLORS[colorIndex % LAYER_COLORS.length];
+      colorIndex++;
 
+      // Load quietly on startup (autoFit = false)
+      addLayer(meta.id, {
+        name:  layerData.name,
+        color: color,
+        file:  layerData.name,
+      }, layerData.geojson, false);
+    }
+  } catch (e) {
+    console.error("Error auto-loading database layers:", e);
+  }
+}
 // ════════════════════════════════════════════════════════════
 // BOOTSTRAP — DOMContentLoaded
 // ════════════════════════════════════════════════════════════
