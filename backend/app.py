@@ -86,6 +86,12 @@ def init_db() -> None:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS layers (
+                id      TEXT PRIMARY KEY,
+                name    TEXT NOT NULL,
+                geojson TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS incidents (
                 id          TEXT PRIMARY KEY,
                 title       TEXT NOT NULL,
