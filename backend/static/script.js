@@ -31,7 +31,7 @@
 // 1. CONSTANTS & STATE
 // ════════════════════════════════════════════════════════════
 
-const API = '';          // same-origin — FastAPI serves both frontend and API
+const API = 'https://s-tracker-backend.onrender.com';          // same-origin — FastAPI serves both frontend and API
 const GAZA_CENTER = [31.35, 34.30];
 const GAZA_ZOOM   = 11;
 const MAX_LAYERS  = 15;
