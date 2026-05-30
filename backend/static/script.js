@@ -725,13 +725,6 @@ function setUploadProgress(filename, pct) {
   if (pct >= 100) setTimeout(() => removeUploadProgress(filename), 1500);
 }
 
-function removeUploadProgress(filename) {
-  const item = document.querySelector(`[data-file="${CSS.escape(filename)}"]`);
-  if (item) item.remove();
-  const container = document.getElementById('upload-progress-container');
-  if (container && !container.children.length) container.classList.add('hidden');
-}
-
 // ════════════════════════════════════════════════════════════
 // 11. LAYER MANAGEMENT
 // ════════════════════════════════════════════════════════════
@@ -868,7 +861,6 @@ function applyLayerStyle(id, newStyle) {
   renderLayerList();
 }
 
-// ── FIXED THE STICKY SYNTAX BUG HERE ───────────────────────
 function renderLayerList() {
   const list       = document.getElementById('layer-list');
   const emptyState = document.getElementById('layer-empty-state');
@@ -898,7 +890,7 @@ function renderLayerList() {
     } else {
       const temp = document.createElement('div');
       temp.innerHTML = cardHtml;
-      list.appendChild(temp.firstElementChild); // Fixed command injector error
+      list.appendChild(temp.firstElementChild);
     }
   });
 }
@@ -1859,3 +1851,217 @@ function startClock() {
     const now = new Date();
     const clockEl = document.getElementById('status-time');
     if (clockEl) clockEl.textContent = now.toUTCString().slice(17, 22) + ' UTC';
+  }
+  tick();
+  setInterval(tick, 30000);
+}
+
+// ════════════════════════════════════════════════════════════
+// 20. MODAL CLOSE BINDINGS
+// ════════════════════════════════════════════════════════════
+
+function initModals() {
+  document.querySelectorAll('.modal-close').forEach(btn => {
+    btn.addEventListener('click', () => closeModal(btn.dataset.modal));
+  });
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.classList.contains('modal-backdrop')) {
+        closeModal(overlay.id);
+      }
+    });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => closeModal(m.id));
+      exitIncidentPlacementMode();
+    }
+  });
+}
+
+// ── Collapsible Right-side Proximity panel bindings ──────
+function initProximityPanel() {
+  const toggleBtn = document.getElementById('proximity-toggle-btn');
+  const panel     = document.getElementById('proximity-panel');
+  const closeBtn  = document.getElementById('proximity-panel-close');
+
+  if (toggleBtn && panel && closeBtn) {
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isClosed = panel.classList.contains('hidden');
+      if (isClosed) {
+        openProximityPanel();
+      } else {
+        closeProximityPanel();
+      }
+    });
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeProximityPanel();
+    });
+  }
+  
+  State.map.on('click', () => {
+    if (!State.placingIncident) {
+      closeProximityPanel();
+    }
+  });
+}
+
+function openProximityPanel() {
+  const panel = document.getElementById('proximity-panel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  setTimeout(() => {
+    panel.classList.remove('translate-x-[380px]', 'opacity-0');
+    panel.classList.add('translate-x-0', 'opacity-100');
+  }, 50);
+}
+
+function closeProximityPanel() {
+  const panel = document.getElementById('proximity-panel');
+  if (!panel) return;
+  panel.classList.remove('translate-x-0', 'opacity-100');
+  panel.classList.add('translate-x-[380px]', 'opacity-0');
+  setTimeout(() => {
+    panel.classList.add('hidden');
+  }, 300);
+}
+
+// ── Custom Right-Click Context Menu setup on the Leaflet Map ──
+function initMapContextMenu() {
+  State.map.on('contextmenu', (e) => {
+    if (e.originalEvent) {
+      e.originalEvent.preventDefault();
+    }
+
+    const oldMenu = document.getElementById('map-context-menu');
+    if (oldMenu) oldMenu.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'map-context-menu';
+    menu.className = 'absolute z-[9999] semi-transparent-glass shadow-panel rounded-xl py-1 w-48 text-xs text-slate-800 dark:text-slate-200 transition-all duration-150 animate-fade-up';
+    
+    menu.style.left = e.originalEvent.pageX + 'px';
+    menu.style.top  = e.originalEvent.pageY + 'px';
+
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+
+    const options = [
+      {
+        text: '📍 Place Incident Here',
+        action: () => {
+          document.getElementById('incident-lat').value = lat.toFixed(6);
+          document.getElementById('incident-lng').value = lng.toFixed(6);
+          saveSetting('incident_lat', lat);
+          saveSetting('incident_lng', lng);
+          
+          updateIncidentCircle();
+          openProximityPanel();
+          runProximityScan();
+        }
+      },
+      {
+        text: '📌 Add Custom Marker',
+        action: () => {
+          const label = prompt("Enter marker name:", "Assessment Point");
+          if (label !== null) {
+            L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
+              .addTo(State.drawnItems)
+              .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
+              .openPopup();
+          }
+        }
+      },
+      {
+        text: '📋 Copy Coordinates',
+        action: () => {
+          const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+          navigator.clipboard.writeText(coords).then(() => {
+            toast('Coordinates copied to clipboard!', 'success');
+          });
+        }
+      },
+      {
+        text: '❌ Clear Map Scans',
+        action: () => {
+          if (State.incidentMarker) State.map.removeLayer(State.incidentMarker);
+          if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
+          if (window.pulsingIncidentMarker) State.map.removeLayer(window.pulsingIncidentMarker);
+          State.drawnItems.clearLayers();
+          hideMeasurementHUD();
+          toast('Cleared scans and layers.', 'info');
+        }
+      }
+    ];
+
+    options.forEach(opt => {
+      const item = document.createElement('div');
+      item.className = 'px-3 py-2 hover:bg-white/10 dark:hover:bg-white/5 cursor-pointer flex items-center transition-colors font-mono font-semibold';
+      item.innerHTML = opt.text;
+      item.onclick = (event) => {
+        event.stopPropagation();
+        opt.action();
+        menu.remove();
+      };
+      menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+
+    const closeMenu = () => {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 50);
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// BOOTSTRAP — DOMContentLoaded
+// ════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+  runLoadingScreen();
+  initTheme();
+  initMap();
+  initTileSwitcher();
+  initSidebar();
+  initSearch();
+  initUpload();
+  initToggleAllLayers();
+  initStyleModal();
+  initDrawTools();
+  initMeasurementHUD();
+  initIncidentForm();
+  initStaffFilters();
+  initAlertModal();
+  initExport();
+  initModals();
+  initProximityPanel();
+  startClock();
+  updateStatusBar();
+
+  loadSavedSettings();
+  loadSavedLayers();
+
+  document.getElementById('dark-mode-toggle')?.addEventListener('click', () => {
+    applyTheme(!State.darkMode);
+  });
+
+  document.querySelectorAll('input[name="severity"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      saveSetting('severity', radio.value);
+    });
+  });
+
+  const medRadio = document.querySelector('input[name="severity"][value="medium"]');
+  if (medRadio && !localStorage.getItem('wm_severity')) medRadio.checked = true;
+
+  fetch(`${API}/api/health`)
+    .then(r => r.json())
+    .then(d => console.info('Backend Cloud:', d.status, '| Layers in Supabase:', d.layers))
+    .catch(() => console.info('Backend offline — running in client-only mode'));
+});
