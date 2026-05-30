@@ -130,7 +130,7 @@
   <div class="flex h-full w-full overflow-hidden" id="main-layout">
 
     <!-- ================================================================
-         SIDEBAR (LEFT SIDEWORKER)
+         SIDEBAR
     ================================================================= -->
     <aside id="sidebar"
            class="sidebar-panel relative z-[1000] flex flex-col w-[380px] min-w-[380px] h-full bg-slate-900 border-r border-slate-800 overflow-hidden transition-all duration-300 ease-in-out">
@@ -425,7 +425,199 @@
         </div>
 
         <!-- ┌─────────────────────────────────────────────────────────┐
-             │  SECTION 5: EXPORT                                       │
+             │  SECTION 5: LIVE INCIDENT CONTROL                       │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center gap-2 mb-3">
+            <div class="w-1 h-4 rounded-full bg-ops-red"></div>
+            <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Live Incident</h2>
+            <div class="ml-auto flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-ops-red animate-ping-slow"></span>
+            </div>
+          </div>
+
+          <!-- Click-to-place hint -->
+          <div class="flex items-center gap-2 mb-3 p-2.5 rounded-lg bg-ops-red/5 border border-ops-red/20">
+            <svg class="w-4 h-4 text-ops-red flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+            </svg>
+            <p class="text-[11px] text-ops-red/80 font-mono">Click map to place incident or enter coords below</p>
+          </div>
+
+          <!-- Form -->
+          <div class="space-y-2.5">
+            <!-- Title -->
+            <div>
+              <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Incident Title</label>
+              <input type="text"
+                     id="incident-title"
+                     placeholder="e.g. Artillery Strike — Block 7"
+                     class="field-input w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-ops-red/60 focus:border-transparent transition-all font-body" />
+            </div>
+
+            <!-- Coordinates row -->
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Latitude</label>
+                <input type="text"
+                       id="incident-lat"
+                       placeholder="31.5000"
+                       class="field-input w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
+              </div>
+              <div>
+                <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Longitude</label>
+                <input type="text"
+                       id="incident-lng"
+                       placeholder="34.4667"
+                       class="field-input w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
+              </div>
+            </div>
+
+            <!-- Hazard radius -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Hazard Radius</label>
+                <span id="radius-value-display" class="text-[10px] font-mono text-ops-amber">500 m</span>
+              </div>
+              <input type="range"
+                     id="incident-radius"
+                     min="100"
+                     max="5000"
+                     step="50"
+                     value="500"
+                     class="w-full accent-ops-amber cursor-pointer" />
+              <div class="flex justify-between mt-0.5">
+                <span class="text-[9px] font-mono text-slate-600">100m</span>
+                <span class="text-[9px] font-mono text-slate-600">5km</span>
+              </div>
+            </div>
+
+            <!-- Severity -->
+            <div>
+              <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1.5">Severity</label>
+              <div class="grid grid-cols-4 gap-1.5">
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="low" class="sr-only" />
+                  <span class="severity-btn block text-center text-[10px] font-mono font-semibold py-1.5 rounded-lg bg-slate-800 border border-slate-700 cursor-pointer transition-all hover:border-ops-green">
+                    LOW
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="medium" class="sr-only" checked />
+                  <span class="severity-btn block text-center text-[10px] font-mono font-semibold py-1.5 rounded-lg bg-slate-800 border border-slate-700 cursor-pointer transition-all hover:border-ops-yellow" data-default="true">
+                    MED
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="high" class="sr-only" />
+                  <span class="severity-btn block text-center text-[10px] font-mono font-semibold py-1.5 rounded-lg bg-slate-800 border border-slate-700 cursor-pointer transition-all hover:border-ops-amber">
+                    HIGH
+                  </span>
+                </label>
+                <label class="severity-option">
+                  <input type="radio" name="severity" value="critical" class="sr-only" />
+                  <span class="severity-btn block text-center text-[10px] font-mono font-semibold py-1.5 rounded-lg bg-slate-800 border border-slate-700 cursor-pointer transition-all hover:border-ops-red">
+                    CRIT
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Description -->
+            <div>
+              <label class="block text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Description</label>
+              <textarea id="incident-description"
+                        rows="2"
+                        placeholder="Situation report or notes…"
+                        class="field-input w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-ops-red/60 focus:border-transparent transition-all font-body resize-none"></textarea>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex gap-2">
+              <button id="btn-log-incident"
+                      class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ops-red hover:bg-red-400 text-white text-sm font-display font-semibold transition-all shadow-glow-red hover:shadow-none active:scale-95">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+                </svg>
+                Log Incident
+              </button>
+              <button id="btn-run-proximity"
+                      class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 border border-slate-700 hover:border-brand-500 hover:bg-brand-500/10 text-slate-300 hover:text-brand-300 text-sm font-display font-semibold transition-all active:scale-95">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+                </svg>
+                Scan Area
+              </button>
+            </div>
+
+            <!-- Place on map button -->
+            <button id="btn-place-incident-mode"
+                    class="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-slate-600 hover:border-ops-red text-slate-500 hover:text-ops-red text-xs font-mono transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zm-7.518-.267A8.25 8.25 0 1120.25 10.5M8.288 14.212A5.25 5.25 0 1117.25 10.5"/>
+              </svg>
+              Click map to place incident
+            </button>
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 6: AT-RISK STAFF LIST                          │
+             └───────────────────────────────────────────────────────── -->
+        <div class="px-4 py-3 border-t border-slate-800" id="staff-section">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-1 h-4 rounded-full bg-ops-amber"></div>
+              <h2 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">At-Risk Staff</h2>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="at-risk-count-badge"
+                    class="hidden text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-ops-red text-white animate-pulse-slow">
+                0
+              </span>
+              <button id="btn-alert-all"
+                      class="hidden text-[10px] font-mono text-white bg-ops-red hover:bg-red-400 px-2.5 py-1 rounded-lg transition-colors">
+                Alert All
+              </button>
+            </div>
+          </div>
+
+          <!-- Filter tabs -->
+          <div class="flex gap-1 mb-3" id="staff-filter-tabs">
+            <button data-filter="all"
+                    class="staff-filter-btn active text-[10px] font-mono px-2.5 py-1 rounded-lg bg-slate-800 border border-brand-500 text-brand-400 transition-all">
+              All
+            </button>
+            <button data-filter="inside"
+                    class="staff-filter-btn text-[10px] font-mono px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
+              Inside
+            </button>
+            <button data-filter="critical"
+                    class="staff-filter-btn text-[10px] font-mono px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
+              Critical
+            </button>
+            <button data-filter="high"
+                    class="staff-filter-btn text-[10px] font-mono px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-ops-amber hover:text-ops-amber transition-all">
+              High
+            </button>
+          </div>
+
+          <!-- Staff results list -->
+          <div id="staff-results-list" class="space-y-2">
+            <!-- Empty state -->
+            <div id="staff-empty-state" class="flex flex-col items-center justify-center py-8 rounded-xl bg-slate-800/30 border border-dashed border-slate-700">
+              <svg class="w-8 h-8 text-slate-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/>
+              </svg>
+              <p class="text-slate-500 text-xs font-mono text-center">Run "Scan Area" after loading<br/>a staff layer and incident.</p>
+            </div>
+            <!-- Dynamic staff cards injected by JS -->
+          </div>
+        </div>
+
+        <!-- ┌─────────────────────────────────────────────────────────┐
+             │  SECTION 7: EXPORT                                       │
              └───────────────────────────────────────────────────────── -->
         <div class="px-4 py-3 border-t border-slate-800">
           <div class="flex items-center gap-2 mb-3">
@@ -480,15 +672,6 @@
 
       <!-- ── TOP-RIGHT MAP CONTROLS ── -->
       <div class="absolute top-4 right-4 z-[500] flex flex-col gap-2">
-
-        <!-- Proximity Sidebar Toggle Button (Triggers slide of Right Panel) -->
-        <div class="map-control-group bg-slate-900/95 backdrop-blur-sm rounded-xl border border-slate-800 p-1 shadow-panel flex justify-end">
-          <button id="proximity-toggle-btn"
-                  class="px-3 py-1.5 rounded-lg text-[10px] font-mono font-semibold text-ops-amber hover:bg-slate-800 flex items-center gap-1.5 transition-all active:scale-95">
-            <span class="w-1.5 h-1.5 rounded-full bg-ops-amber animate-pulse-slow"></span>
-            PROXIMITY SCAN
-          </button>
-        </div>
 
         <!-- Tile layer switcher -->
         <div class="map-control-group bg-slate-900/95 backdrop-blur-sm rounded-xl border border-slate-800 p-1 shadow-panel">
@@ -547,208 +730,6 @@
           </button>
         </div>
       </div>
-
-      <!-- ── FLOATING PROXIMITY PANEL (COLLAPSIBLE RIGHT-SIDE PANEL) ── -->
-      <!-- Houses Incident Forms & Proximity Assessments to reduce clutter -->
-      <div id="proximity-panel"
-           class="absolute top-4 right-4 z-[600] w-[350px] h-[calc(100%-2rem)] flex flex-col rounded-2xl glass-panel semi-transparent-glass shadow-panel transition-all duration-300 transform translate-x-[380px] hidden opacity-0">
-        
-        <!-- Header -->
-        <div class="flex-none px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <div class="w-1.5 h-4 rounded-full bg-ops-amber animate-pulse-slow"></div>
-            <h3 class="font-display font-semibold text-sm text-slate-200 uppercase tracking-wider">Proximity Scan</h3>
-          </div>
-          <button id="proximity-panel-close"
-                  class="text-slate-500 hover:text-slate-300 transition-colors"
-                  aria-label="Close panel">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <!-- Proximity Scroll Content -->
-        <div class="flex-1 overflow-y-auto sidebar-scroll p-4 space-y-4">
-          
-          <!-- Live Incident Configuration -->
-          <div class="space-y-3">
-            <div class="flex items-center gap-1">
-              <svg class="w-3.5 h-3.5 text-ops-red animate-pulse-slow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
-              </svg>
-              <h4 class="font-display font-semibold text-xs text-slate-300 uppercase tracking-wider">1. Setup Target</h4>
-            </div>
-
-            <!-- Title -->
-            <div>
-              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Incident Title</label>
-              <input type="text"
-                     id="incident-title"
-                     placeholder="e.g. Artillery Strike — Block 7"
-                     class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-body" />
-            </div>
-
-            <!-- Coordinates row -->
-            <div class="grid grid-cols-2 gap-2">
-              <div>
-                <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Latitude</label>
-                <input type="text"
-                       id="incident-lat"
-                       placeholder="31.5000"
-                       class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
-              </div>
-              <div>
-                <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Longitude</label>
-                <input type="text"
-                       id="incident-lng"
-                       placeholder="34.4667"
-                       class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-mono" />
-              </div>
-            </div>
-
-            <!-- Hazard radius -->
-            <div>
-              <div class="flex items-center justify-between mb-1">
-                <label class="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Hazard Radius</label>
-                <span id="radius-value-display" class="text-[9px] font-mono text-ops-amber">500 m</span>
-              </div>
-              <input type="range"
-                     id="incident-radius"
-                     min="100"
-                     max="5000"
-                     step="50"
-                     value="500"
-                     class="w-full accent-ops-amber cursor-pointer" />
-              <div class="flex justify-between mt-0.5">
-                <span class="text-[9px] font-mono text-slate-600">100m</span>
-                <span class="text-[9px] font-mono text-slate-600">5km</span>
-              </div>
-            </div>
-
-            <!-- Severity -->
-            <div>
-              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Severity</label>
-              <div class="grid grid-cols-4 gap-1">
-                <label class="severity-option">
-                  <input type="radio" name="severity" value="low" class="sr-only" />
-                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-green">
-                    LOW
-                  </span>
-                </label>
-                <label class="severity-option">
-                  <input type="radio" name="severity" value="medium" class="sr-only" checked />
-                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-yellow" data-default="true">
-                    MED
-                  </span>
-                </label>
-                <label class="severity-option">
-                  <input type="radio" name="severity" value="high" class="sr-only" />
-                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-amber">
-                    HIGH
-                  </span>
-                </label>
-                <label class="severity-option">
-                  <input type="radio" name="severity" value="critical" class="sr-only" />
-                  <span class="severity-btn block text-center text-[9px] font-mono font-semibold py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer transition-all hover:border-ops-red">
-                    CRIT
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            <!-- Description -->
-            <div>
-              <label class="block text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1">Description</label>
-              <textarea id="incident-description"
-                        rows="2"
-                        placeholder="Situation report or notes…"
-                        class="field-input w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-ops-red/60 focus:border-transparent transition-all font-body resize-none"></textarea>
-            </div>
-
-            <!-- Quick Map placement Trigger -->
-            <button id="btn-place-incident-mode"
-                    class="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-dashed border-slate-700 hover:border-ops-red text-slate-500 hover:text-ops-red text-[10px] font-mono transition-all">
-              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zm-7.518-.267A8.25 8.25 0 1120.25 10.5M8.288 14.212A5.25 5.25 0 1117.25 10.5"/>
-              </svg>
-              Select Placement on Map
-            </button>
-
-            <!-- Actions buttons -->
-            <div class="flex gap-2 pt-1">
-              <button id="btn-log-incident"
-                      class="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl bg-ops-red hover:bg-red-400 text-white text-xs font-display font-semibold transition-all shadow-glow-red hover:shadow-none active:scale-95">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
-                </svg>
-                Log Incident
-              </button>
-              <button id="btn-run-proximity"
-                      class="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-500 hover:bg-brand-500/10 text-slate-300 hover:text-brand-300 text-xs font-display font-semibold transition-all active:scale-95">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
-                </svg>
-                Locate & Assess
-              </button>
-            </div>
-          </div>
-
-          <!-- At-Risk Staff List -->
-          <div class="border-t border-slate-800 pt-3" id="staff-section">
-            <div class="flex items-center justify-between mb-3.5">
-              <div class="flex items-center gap-2">
-                <div class="w-1.5 h-4 rounded-full bg-ops-amber animate-pulse-slow"></div>
-                <h4 class="font-display font-semibold text-xs text-slate-300 uppercase tracking-wider">2. Assessment results</h4>
-              </div>
-              <div class="flex items-center gap-2">
-                <span id="at-risk-count-badge"
-                      class="hidden text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-ops-red text-white">
-                  0
-                </span>
-                <button id="btn-alert-all"
-                        class="hidden text-[9px] font-mono text-white bg-ops-red hover:bg-red-400 px-2 py-0.5 rounded-lg transition-colors">
-                  Alert All
-                </button>
-              </div>
-            </div>
-
-            <!-- Filter tabs -->
-            <div class="flex gap-1 mb-3" id="staff-filter-tabs">
-              <button data-filter="all"
-                      class="staff-filter-btn active text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-brand-500 text-brand-400 transition-all">
-                All
-              </button>
-              <button data-filter="inside"
-                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
-                Inside
-              </button>
-              <button data-filter="critical"
-                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-red hover:text-ops-red transition-all">
-                Crit
-              </button>
-              <button data-filter="high"
-                      class="staff-filter-btn text-[9px] font-mono px-2.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:border-ops-amber hover:text-ops-amber transition-all">
-                High
-              </button>
-            </div>
-
-            <!-- Staff results list -->
-            <div id="staff-results-list" class="space-y-2">
-              <!-- Empty state -->
-              <div id="staff-empty-state" class="flex flex-col items-center justify-center py-6 rounded-xl bg-slate-950/20 border border-dashed border-slate-800">
-                <svg class="w-7 h-7 text-slate-700 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/>
-                </svg>
-                <p class="text-slate-500 text-[10px] font-mono text-center px-4">Press "Locate & Assess" after initializing an incident to map endangered assets.</p>
-              </div>
-              <!-- Dynamic staff cards injected by JS -->
-            </div>
-          </div>
-
-        </div><!-- /proximity-panel scroll content -->
-      </div><!-- /proximity-panel -->
 
       <!-- ── BOTTOM-LEFT: COORDINATES DISPLAY ── -->
       <div class="absolute bottom-6 left-4 z-[500]">
@@ -996,6 +977,11 @@
   <!-- Turf.js — area calculation -->
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
 
+
+  <!-- Supabase SDK (for settings persistence) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- Tabler Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css" />
   <!-- Application -->
   <script src="/script.js"></script>
 </body>
