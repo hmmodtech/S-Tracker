@@ -1603,7 +1603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (medRadio) medRadio.checked = true;
 
   // Health check (informational only — offline is fine)
-  fetch(`${API}/api/health`)
+  await checkAuth();
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(d => console.info('Backend online:', d.status))
     .catch(() => console.info('Backend offline — running in client-only mode'));
@@ -1616,7 +1616,51 @@ document.addEventListener('DOMContentLoaded', () => {
    restoreLayers();
   }, 200);
 });
+// ════════════════════════════════════════════════════════════
+// AUTH BOOTSTRAP — add this at the TOP of your DOMContentLoaded
+// Replace the existing fetch('/api/health') block with this
+// ════════════════════════════════════════════════════════════
 
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.status === 401) {
+      // Not logged in — show login page
+      window.location.href = '/login.html';
+      return false;
+    }
+    const user = await res.json();
+    // Show user info in status bar
+    const bar = document.getElementById('status-bar') || document.querySelector('.status-bar');
+    if (bar) {
+      const userEl = document.createElement('span');
+      userEl.style.cssText = 'font-size:10px;font-family:var(--font-mono);color:#475569;margin-left:auto;display:flex;align-items:center;gap:8px';
+      userEl.innerHTML = `
+        <span style="color:#64748b">${user.name} (${user.email})</span>
+        <button onclick="logoutUser()" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#64748b;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;font-family:var(--font-mono)">
+          Sign Out
+        </button>`;
+      bar.appendChild(userEl);
+    }
+    return true;
+  } catch {
+    window.location.href = '/login.html';
+    return false;
+  }
+}
+
+async function logoutUser() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/login.html';
+}
+window.logoutUser = logoutUser;
+
+// ════════════════════════════════════════════════════════════
+// In your DOMContentLoaded, replace:
+//   fetch(`${API}/api/health`)...
+// With:
+//   await checkAuth();
+// ════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════
 // SETTINGS PERSISTENCE  (localStorage only — no Supabase key needed)
 // ════════════════════════════════════════════════════════════
