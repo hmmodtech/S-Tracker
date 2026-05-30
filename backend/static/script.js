@@ -1,7 +1,4 @@
 
-bash
-
-cat > /mnt/user-data/outputs/script.js << 'JSEOF'
 /* ============================================================
    WatchMe — Smart Security Dashboard
    script.js — Complete Application Logic (v2 with Auth)
@@ -1134,5 +1131,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     restoreLayers();
   }, 200);
 });
-JSEOF
-echo "Done — $(wc -l < /mnt/user-data/outputs/script.js) lines"
