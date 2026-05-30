@@ -678,6 +678,8 @@ function addLayer(id, meta, geojson) {
   renderLayerList();
   updateLayerCountBadge();
   updateStatusBar();
+     persistLayers();
+
 
   try {
     const bounds = leafletGroup.getBounds();
@@ -752,6 +754,7 @@ function removeLayer(id) {
   renderLayerList();
   updateLayerCountBadge();
   updateStatusBar();
+   persistLayers();
 }
 
 function toggleLayerVisibility(id) {
@@ -964,6 +967,49 @@ function initStyleModal() {
     closeModal('layer-style-modal');
     toast('Layer style updated.', 'success');
   });
+}
+
+// ════════════════════════════════════════════════════════════
+// LAYER PERSISTENCE  (localStorage)
+// ════════════════════════════════════════════════════════════
+
+function persistLayers() {
+  try {
+    const toSave = Object.entries(State.layers).map(([id, layer]) => ({
+      id,
+      meta:    layer.meta,
+      geojson: layer.geojson,
+      style:   layer.style,
+      visible: layer.visible,
+    }));
+    localStorage.setItem('wm_layers', JSON.stringify(toSave));
+  } catch(e) {
+    console.warn('Could not persist layers:', e);
+  }
+}
+
+function restoreLayers() {
+  try {
+    const saved = localStorage.getItem('wm_layers');
+    if (!saved) return;
+    const layers = JSON.parse(saved);
+    if (!Array.isArray(layers) || !layers.length) return;
+    layers.forEach(({ id, meta, geojson, style, visible }) => {
+      if (!geojson?.features) return;
+      const leafletGroup = buildLeafletGroup(id, geojson, style);
+      State.layers[id] = { meta, geojson, leafletGroup, visible: visible !== false, style };
+      if (visible !== false) leafletGroup.addTo(State.map);
+    });
+    renderLayerList();
+    updateLayerCountBadge();
+    updateStatusBar();
+    if (Object.keys(State.layers).length > 0) {
+      toast(`Restored ${Object.keys(State.layers).length} layer(s)`, 'success');
+    }
+  } catch(e) {
+    console.warn('Could not restore layers:', e);
+    localStorage.removeItem('wm_layers');
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1567,6 +1613,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initProximityPanel();
     initContextMenu();
     loadPersistedSettings();  // localStorage only — no Supabase
+   restoreLayers();
   }, 200);
 });
 
