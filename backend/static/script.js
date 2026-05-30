@@ -1930,87 +1930,158 @@ function closeProximityPanel() {
 }
 
 // ── Custom Right-Click Context Menu setup on the Leaflet Map ──
+// دالة لتحويل الإحداثيات العشرية إلى نظام الدرجات والدقائق والثواني (DMS) لتطابق صورتك
+function toDMS(lat, lng) {
+  const convert = (val, pos, neg) => {
+    const absVal = Math.abs(val);
+    const degrees = Math.floor(absVal);
+    const minutes = Math.floor((absVal - degrees) * 60);
+    const seconds = (((absVal - degrees) * 60 - minutes) * 60).toFixed(1);
+    const direction = val >= 0 ? pos : neg;
+    return `${degrees}°${minutes}'${seconds}"${direction}`;
+  };
+  return `${convert(lat, 'N', 'S')}, ${convert(lng, 'E', 'W')}`;
+}
+
+// تعديل القائمة المنبثقة لتطابق التصميم الموجود بالصورة المرفقة تماماً
 function initMapContextMenu() {
   State.map.on('contextmenu', (e) => {
     if (e.originalEvent) {
       e.originalEvent.preventDefault();
     }
 
+    // إزالة أي قائمة قديمة مفتوحة
     const oldMenu = document.getElementById('map-context-menu');
     if (oldMenu) oldMenu.remove();
 
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+    const dmsCoords = toDMS(lat, lng);
+    const decCoords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+
+    // إنشاء حاوية القائمة المنبثقة بتصميم Glassmorphic احترافي ومريح للعين
     const menu = document.createElement('div');
     menu.id = 'map-context-menu';
-    menu.className = 'absolute z-[9999] semi-transparent-glass shadow-panel rounded-xl py-1 w-48 text-xs text-slate-800 dark:text-slate-200 transition-all duration-150 animate-fade-up';
+    menu.className = 'absolute z-[9999] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-64 text-sm overflow-hidden animate-fade-up';
     
     menu.style.left = e.originalEvent.pageX + 'px';
     menu.style.top  = e.originalEvent.pageY + 'px';
 
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
+    // هيكل القائمة المطابق للصورة تماماً (مع الهيدر الدائري للإحداثيات والأيقونة الزرقاء)
+    menu.innerHTML = `
+      <!-- الهيدر العلوي للإحداثيات -->
+      <div class="p-4 bg-slate-50 dark:bg-slate-950/40 border-b border-slate-100 dark:border-slate-800/80">
+        <div class="flex items-start gap-2.5">
+          <!-- أيقونة الموقع الزرقاء -->
+          <svg class="w-4 h-4 text-blue-500 mt-0.5 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+          </svg>
+          <div>
+            <span class="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500 block tracking-wider uppercase">Coordinates</span>
+            <span class="text-xs font-bold text-slate-800 dark:text-slate-200 block mt-1 leading-tight">${dmsCoords}</span>
+            <span class="text-[10px] font-mono text-slate-400 dark:text-slate-500 block mt-0.5">${decCoords}</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- خيارات القائمة -->
+      <div class="py-1 divide-y divide-slate-100 dark:divide-slate-800/50">
+        <!-- 1. نسخ الإحداثيات -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-copy-coords">
+          <span class="text-slate-400 dark:text-slate-500 text-sm">📋</span>
+          Copy Coordinates
+        </div>
 
-    const options = [
-      {
-        text: '📍 Place Incident Here',
-        action: () => {
-          document.getElementById('incident-lat').value = lat.toFixed(6);
-          document.getElementById('incident-lng').value = lng.toFixed(6);
-          saveSetting('incident_lat', lat);
-          saveSetting('incident_lng', lng);
-          
-          updateIncidentCircle();
-          openProximityPanel();
-          runProximityScan();
-        }
-      },
-      {
-        text: '📌 Add Custom Marker',
-        action: () => {
-          const label = prompt("Enter marker name:", "Assessment Point");
-          if (label !== null) {
-            L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
-              .addTo(State.drawnItems)
-              .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
-              .openPopup();
-          }
-        }
-      },
-      {
-        text: '📋 Copy Coordinates',
-        action: () => {
-          const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-          navigator.clipboard.writeText(coords).then(() => {
-            toast('Coordinates copied to clipboard!', 'success');
-          });
-        }
-      },
-      {
-        text: '❌ Clear Map Scans',
-        action: () => {
-          if (State.incidentMarker) State.map.removeLayer(State.incidentMarker);
-          if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
-          if (window.pulsingIncidentMarker) State.map.removeLayer(window.pulsingIncidentMarker);
-          State.drawnItems.clearLayers();
-          hideMeasurementHUD();
-          toast('Cleared scans and layers.', 'info');
-        }
-      }
-    ];
+        <!-- 2. توسيط الخريطة هنا -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-center-map">
+          <span class="text-slate-400 dark:text-slate-500 text-sm">🎯</span>
+          Center Map Here
+        </div>
 
-    options.forEach(opt => {
-      const item = document.createElement('div');
-      item.className = 'px-3 py-2 hover:bg-white/10 dark:hover:bg-white/5 cursor-pointer flex items-center transition-colors font-mono font-semibold';
-      item.innerHTML = opt.text;
-      item.onclick = (event) => {
-        event.stopPropagation();
-        opt.action();
-        menu.remove();
-      };
-      menu.appendChild(item);
-    });
+        <!-- 3. إضافة علامة هنا -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-add-marker">
+          <span class="text-slate-400 dark:text-slate-500 text-sm">➕</span>
+          Add Marker Here
+        </div>
 
+        <!-- 4. توجيه من هنا (الذي يقوم بوضع الحادث وتشغيل الفحص فوراً) -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center justify-between transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-route-from">
+          <div class="flex items-center gap-3">
+            <span class="text-slate-400 dark:text-slate-500 text-sm">🔀</span>
+            Route From Here
+          </div>
+          <!-- زر التشغيل الأزرق الصغير المطابق تماماً للصورة -->
+          <span class="w-4 h-4 rounded bg-blue-500 text-white flex items-center justify-center text-[8px] font-bold">▶</span>
+        </div>
+
+        <!-- 5. توجيه إلى هنا -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center justify-between transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-route-to">
+          <div class="flex items-center gap-3">
+            <span class="text-slate-400 dark:text-slate-500 text-sm">➔</span>
+            Route To Here
+          </div>
+          <span class="w-4 h-4 rounded bg-blue-500 text-white flex items-center justify-center text-[8px] font-bold">▶</span>
+        </div>
+
+        <!-- 6. إعدادات الخريطة -->
+        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-map-settings">
+          <span class="text-slate-400 dark:text-slate-500 text-sm">⚙</span>
+          Map Settings
+        </div>
+      </div>
+    `;
+
+    // ربط أكواد التشغيل والعمليات بالخيارات
     document.body.appendChild(menu);
 
+    // 1. نسخ الإحداثيات
+    document.getElementById('menu-copy-coords').onclick = () => {
+      const coordsText = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      navigator.clipboard.writeText(coordsText).then(() => {
+        toast('Coordinates copied to clipboard!', 'success');
+      });
+    };
+
+    // 2. توسيط الخريطة
+    document.getElementById('menu-center-map').onclick = () => {
+      State.map.panTo([lat, lng]);
+    };
+
+    // 3. إضافة علامة
+    document.getElementById('menu-add-marker').onclick = () => {
+      const label = prompt("Enter custom marker label:", "Assessment Point");
+      if (label) {
+        L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
+          .addTo(State.drawnItems)
+          .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
+          .openPopup();
+      }
+    };
+
+    // 4. وضع الحادث وتشغيل الفحص الأمني فوراً (توجيه من هنا)
+    document.getElementById('menu-route-from').onclick = () => {
+      document.getElementById('incident-lat').value = lat.toFixed(6);
+      document.getElementById('incident-lng').value = lng.toFixed(6);
+      saveSetting('incident_lat', lat);
+      saveSetting('incident_lng', lng);
+      
+      updateIncidentCircle();
+      openProximityPanel();
+      runProximityScan();
+    };
+
+    // 5. توجيه إلى هنا
+    document.getElementById('menu-route-to').onclick = () => {
+      State.map.setView([lat, lng], 14, { animate: true });
+    };
+
+    // 6. إعدادات الخريطة (فتح لوحة التحكم)
+    document.getElementById('menu-map-settings').onclick = () => {
+      window.location.href = '/dashboard.html';
+    };
+
+    // غلق القائمة عند الضغط في أي مكان آخر
     const closeMenu = () => {
       menu.remove();
       document.removeEventListener('click', closeMenu);
@@ -2018,7 +2089,6 @@ function initMapContextMenu() {
     setTimeout(() => document.addEventListener('click', closeMenu), 50);
   });
 }
-
 // ════════════════════════════════════════════════════════════
 // BOOTSTRAP — DOMContentLoaded
 // ════════════════════════════════════════════════════════════
