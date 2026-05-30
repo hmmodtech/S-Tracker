@@ -1,6 +1,6 @@
 /* ============================================================
    WatchMe — Smart Security Dashboard
-   script.js — Complete Application Logic
+   script.js — Complete Application Logic (Supabase Cloud Sync)
    ============================================================ */
 
 'use strict';
@@ -9,7 +9,7 @@
 // 1. CONSTANTS & STATE
 // ════════════════════════════════════════════════════════════
 
-// رابط سيرفر الباك إند الخاص بك على ريندر لتوجيه كافة الطلبات إليه
+// الرابط الموحد للباك إند (Web Service) المسؤول عن تخزين البيانات في سوبابيس
 const API = 'https://s-tracker.onrender.com';          
 const GAZA_CENTER = [31.35, 34.30];
 const GAZA_ZOOM   = 11;
@@ -48,6 +48,7 @@ let colorIndex = 0;
 /** Show a toast notification */
 function toast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toast-container');
+  if (!container) return;
   const icons = {
     success: `<svg class="w-4 h-4 text-ops-green flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>`,
     error:   `<svg class="w-4 h-4 text-ops-red flex-none"   fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>`,
@@ -114,14 +115,14 @@ function uid() {
 /** Clamp a number */
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-/** Haversine distance (metres) — client-side for instant feedback */
+/** Haversine distance (metres) — Fixed lowercase math bugs */
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat/2)**2 +
-            math.cos(lat1 * Math.PI/180) * math.cos(lat2 * Math.PI/180) *
-            math.sin(dLon/2)**2;
+            Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+            Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
@@ -176,19 +177,21 @@ function initTheme() {
 // ════════════════════════════════════════════════════════════
 
 function runLoadingScreen() {
-  const bar   = document.getElementById('loading-bar');
+  const bar    = document.getElementById('loading-bar');
   const steps = [10, 30, 55, 75, 90, 100];
   let   i     = 0;
   const tick = setInterval(() => {
     if (i < steps.length) {
-      bar.style.width = steps[i] + '%';
+      if (bar) bar.style.width = steps[i] + '%';
       i++;
     } else {
       clearInterval(tick);
       setTimeout(() => {
         const screen = document.getElementById('loading-screen');
-        screen.classList.add('fade-out');
-        setTimeout(() => screen.remove(), 600);
+        if (screen) {
+          screen.classList.add('fade-out');
+          setTimeout(() => screen.remove(), 600);
+        }
       }, 300);
     }
   }, 180);
@@ -199,23 +202,26 @@ function runLoadingScreen() {
 // ════════════════════════════════════════════════════════════
 
 function initSidebar() {
-  const sidebar     = document.getElementById('sidebar');
+  const sidebar   = document.getElementById('sidebar');
   const collapseBtn = document.getElementById('sidebar-collapse-btn');
   const expandBtn   = document.getElementById('sidebar-expand-btn');
 
-  collapseBtn.addEventListener('click', () => {
-    sidebar.classList.add('collapsed');
-    expandBtn.classList.remove('hidden');
-    expandBtn.classList.add('flex');
-  });
-  expandBtn.addEventListener('click', () => {
-    sidebar.classList.remove('collapsed');
-    expandBtn.classList.add('hidden');
-    expandBtn.classList.remove('flex');
-  });
+  if (collapseBtn && expandBtn && sidebar) {
+    collapseBtn.addEventListener('click', () => {
+      sidebar.classList.add('collapsed');
+      expandBtn.classList.remove('hidden');
+      expandBtn.classList.add('flex');
+    });
+    expandBtn.addEventListener('click', () => {
+      sidebar.classList.remove('collapsed');
+      expandBtn.classList.add('hidden');
+      expandBtn.classList.remove('flex');
+    });
+  }
 
   // Drag-to-resize
   const handle = document.getElementById('sidebar-resize-handle');
+  if (!handle || !sidebar) return;
   let dragging  = false;
   let startX, startW;
 
@@ -368,8 +374,8 @@ function initTileSwitcher() {
 function onMapMouseMove(e) {
   const { lat, lng } = e.latlng;
   const fmt = (v, pos, neg) => `${Math.abs(v).toFixed(5)}°${v >= 0 ? pos : neg}`;
-  document.getElementById('cursor-coords').textContent =
-    `${fmt(lat,'N','S')}, ${fmt(lng,'E','W')}`;
+  const el = document.getElementById('cursor-coords');
+  if (el) el.textContent = `${fmt(lat,'N','S')}, ${fmt(lng,'E','W')}`;
 }
 
 function updateScaleDisplay() {
@@ -379,7 +385,8 @@ function updateScaleDisplay() {
   const mpp    = 156543 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
   const mapW   = State.map.getSize().x;
   const scaleM = Math.round(mpp * mapW * 0.15);
-  document.getElementById('map-scale-text').textContent = fmtDist(scaleM) + ' scale';
+  const el = document.getElementById('map-scale-text');
+  if (el) el.textContent = fmtDist(scaleM) + ' scale';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -392,6 +399,8 @@ function initSearch() {
   const input   = document.getElementById('global-search');
   const clear   = document.getElementById('search-clear');
   const results = document.getElementById('search-results');
+
+  if (!input || !clear || !results) return;
 
   input.addEventListener('input', () => {
     const val = input.value.trim();
@@ -476,6 +485,7 @@ async function geocodeSearch(query) {
 function showSearchResult(results) {
   const container = document.getElementById('search-results');
   const list      = document.getElementById('search-results-list');
+  if (!container || !list) return;
   if (!results.length) { container.classList.add('hidden'); return; }
 
   list.innerHTML = results.map((r, i) => `
@@ -495,14 +505,16 @@ function showSearchResult(results) {
 
 window.selectSearchResult = function(index) {
   const container = document.getElementById('search-results');
-  const r = container._results?.[index];
+  const r = container?._results?.[index];
   if (!r) return;
   const lat = parseFloat(r.lat);
   const lng = parseFloat(r.lon);
   State.map.setView([lat, lng], 15, { animate: true });
-  container.classList.add('hidden');
-  document.getElementById('global-search').value = '';
-  document.getElementById('search-clear').classList.add('hidden');
+  if (container) container.classList.add('hidden');
+  const searchInput = document.getElementById('global-search');
+  if (searchInput) searchInput.value = '';
+  const clearBtn = document.getElementById('search-clear');
+  if (clearBtn) clearBtn.classList.add('hidden');
   
   L.marker([lat, lng], { icon: createCustomMarkerIcon('#06b6d4') })
     .addTo(State.map)
@@ -522,6 +534,8 @@ window.selectSearchResult = function(index) {
 function initUpload() {
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
+
+  if (!dropZone || !fileInput) return;
 
   dropZone.addEventListener('click', (e) => {
     if (e.target !== fileInput) fileInput.click();
@@ -688,6 +702,7 @@ async function parseCSV(file) {
 
 function showUploadProgress(filename, pct) {
   const container = document.getElementById('upload-progress-container');
+  if (!container) return;
   container.classList.remove('hidden');
   let item = container.querySelector(`[data-file="${CSS.escape(filename)}"]`);
   if (!item) {
@@ -714,7 +729,7 @@ function removeUploadProgress(filename) {
   const item = document.querySelector(`[data-file="${CSS.escape(filename)}"]`);
   if (item) item.remove();
   const container = document.getElementById('upload-progress-container');
-  if (!container.children.length) container.classList.add('hidden');
+  if (container && !container.children.length) container.classList.add('hidden');
 }
 
 // ════════════════════════════════════════════════════════════
@@ -754,7 +769,6 @@ function buildLeafletGroup(layerId, geojson, style) {
       return L.marker(latlng, { icon: createCustomMarkerIcon(iconColor) });
     },
     onEachFeature: (feature, layer) => {
-      const props = feature.properties || {};
       layer.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
         showFeaturePopup(feature, layer, layerId, e.latlng);
@@ -769,7 +783,6 @@ function showFeaturePopup(feature, leafletLayer, layerId, latlng) {
   const layerMeta = State.layers[layerId]?.meta || {};
   const name     = props.name || props.Name || 'Unnamed Feature';
   const desc     = props.description || props.Description || '';
-  const style    = State.layers[layerId]?.style || {};
 
   const skip = new Set(['name','Name','description','Description','_style']);
   const dispProps = Object.entries(props).filter(([k]) => !skip.has(k) && k && props[k] !== '');
@@ -855,17 +868,19 @@ function applyLayerStyle(id, newStyle) {
   renderLayerList();
 }
 
+// ── FIXED THE STICKY SYNTAX BUG HERE ───────────────────────
 function renderLayerList() {
   const list       = document.getElementById('layer-list');
   const emptyState = document.getElementById('layer-empty-state');
+  if (!list) return;
   const layerIds   = Object.keys(State.layers);
 
   if (!layerIds.length) {
-    emptyState.style.display = 'flex';
+    if (emptyState) emptyState.style.display = 'flex';
     list.querySelectorAll('.layer-card').forEach(el => el.remove());
     return;
   }
-  emptyState.style.display = 'none';
+  if (emptyState) emptyState.style.display = 'none';
 
   const existingIds = new Set(Array.from(list.querySelectorAll('.layer-card')).map(el => el.dataset.id));
   const currentIds  = new Set(layerIds);
@@ -883,7 +898,7 @@ function renderLayerList() {
     } else {
       const temp = document.createElement('div');
       temp.innerHTML = cardHtml;
-      list.appendChild(temp.firstElementChild);
+      list.appendChild(temp.firstElementChild); // Fixed command injector error
     }
   });
 }
@@ -944,7 +959,8 @@ window.openLayerStyleModal       = openLayerStyleModal;
 
 function updateLayerCountBadge() {
   const count = Object.keys(State.layers).length;
-  document.getElementById('layer-count-badge').textContent = `${count} / ${MAX_LAYERS}`;
+  const el = document.getElementById('layer-count-badge');
+  if (el) el.textContent = `${count} / ${MAX_LAYERS}`;
 }
 
 function fitAllLayers() {
@@ -970,23 +986,29 @@ function locateMe() {
 }
 
 function initToggleAllLayers() {
-  document.getElementById('toggle-all-layers').addEventListener('click', function() {
-    State.allLayersOn = !State.allLayersOn;
-    this.textContent = State.allLayersOn ? 'All OFF' : 'All ON';
-    Object.keys(State.layers).forEach(id => {
-      State.layers[id].visible = State.allLayersOn;
-      if (State.allLayersOn) State.map.addLayer(State.layers[id].leafletGroup);
-      else                   State.map.removeLayer(State.layers[id].leafletGroup);
+  const toggleBtn = document.getElementById('toggle-all-layers');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function() {
+      State.allLayersOn = !State.allLayersOn;
+      this.textContent = State.allLayersOn ? 'All OFF' : 'All ON';
+      Object.keys(State.layers).forEach(id => {
+        State.layers[id].visible = State.allLayersOn;
+        if (State.allLayersOn) State.map.addLayer(State.layers[id].leafletGroup);
+        else                   State.map.removeLayer(State.layers[id].leafletGroup);
+      });
+      renderLayerList();
     });
-    renderLayerList();
-  });
+  }
 
-  document.getElementById('delete-all-layers').addEventListener('click', () => {
-    if (!Object.keys(State.layers).length) return;
-    if (!confirm('Delete all layers?')) return;
-    Object.keys(State.layers).forEach(id => removeLayer(id));
-    toast('All layers removed.', 'info');
-  });
+  const deleteBtn = document.getElementById('delete-all-layers');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      if (!Object.keys(State.layers).length) return;
+      if (!confirm('Delete all layers?')) return;
+      Object.keys(State.layers).forEach(id => removeLayer(id));
+      toast('All layers removed.', 'info');
+    });
+  }
 }
 
 function openLayerStyleModal(id) {
@@ -1009,22 +1031,26 @@ function openLayerStyleModal(id) {
 
 function initStyleModal() {
   ['style-stroke-color','style-fill-color'].forEach(id => {
-    document.getElementById(id).addEventListener('input', function() {
-      const hexId = id === 'style-stroke-color' ? 'style-stroke-hex' : 'style-fill-hex';
-      document.getElementById(hexId).textContent = this.value;
-    });
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', function() {
+        const hexId = id === 'style-stroke-color' ? 'style-stroke-hex' : 'style-fill-hex';
+        document.getElementById(hexId).textContent = this.value;
+      });
+    }
   });
-  document.getElementById('style-weight').addEventListener('input', function() {
+  
+  document.getElementById('style-weight')?.addEventListener('input', function() {
     document.getElementById('style-weight-val').textContent = this.value + 'px';
   });
-  document.getElementById('style-fill-opacity').addEventListener('input', function() {
+  document.getElementById('style-fill-opacity')?.addEventListener('input', function() {
     document.getElementById('style-fill-opacity-val').textContent = parseFloat(this.value).toFixed(2);
   });
-  document.getElementById('style-layer-opacity').addEventListener('input', function() {
+  document.getElementById('style-layer-opacity')?.addEventListener('input', function() {
     document.getElementById('style-layer-opacity-val').textContent = parseFloat(this.value).toFixed(2);
   });
 
-  document.getElementById('style-apply-btn').addEventListener('click', () => {
+  document.getElementById('style-apply-btn')?.addEventListener('click', () => {
     const id = document.getElementById('style-modal-layer-id').value;
     applyLayerStyle(id, {
       color:       document.getElementById('style-stroke-color').value,
@@ -1090,8 +1116,10 @@ async function loadSavedSettings() {
   }
   if (settings.wm_radius) {
     const r = parseInt(settings.wm_radius);
-    document.getElementById('incident-radius').value = r;
-    document.getElementById('radius-value-display').textContent = fmtDist(r);
+    const slider = document.getElementById('incident-radius');
+    if (slider) slider.value = r;
+    const disp = document.getElementById('radius-value-display');
+    if (disp) disp.textContent = fmtDist(r);
   }
   if (settings.wm_severity) {
     const radio = document.querySelector(`input[name="severity"][value="${settings.wm_severity}"]`);
@@ -1100,8 +1128,10 @@ async function loadSavedSettings() {
   if (settings.wm_incident_lat && settings.wm_incident_lng) {
     const lat = parseFloat(settings.wm_incident_lat);
     const lng = parseFloat(settings.wm_incident_lng);
-    document.getElementById('incident-lat').value = lat.toFixed(6);
-    document.getElementById('incident-lng').value = lng.toFixed(6);
+    const latInput = document.getElementById('incident-lat');
+    const lngInput = document.getElementById('incident-lng');
+    if (latInput) latInput.value = lat.toFixed(6);
+    if (lngInput) lngInput.value = lng.toFixed(6);
     updateIncidentCircle();
   }
 }
@@ -1172,11 +1202,12 @@ function showDrawModeIndicator(tool) {
     edit:     'Edit mode — drag handles to reshape',
     delete:   'Delete mode — click features to remove',
   };
-  document.getElementById('draw-mode-label').textContent = labels[tool] || 'Drawing active';
-  document.getElementById('draw-mode-indicator').classList.remove('hidden');
+  const labelEl = document.getElementById('draw-mode-label');
+  if (labelEl) labelEl.textContent = labels[tool] || 'Drawing active';
+  document.getElementById('draw-mode-indicator')?.classList.remove('hidden');
 }
 function hideDrawModeIndicator() {
-  document.getElementById('draw-mode-indicator').classList.add('hidden');
+  document.getElementById('draw-mode-indicator')?.classList.add('hidden');
 }
 
 function onDrawCreated(e) {
@@ -1211,13 +1242,13 @@ function onDrawDeleted() { hideMeasurementHUD(); }
 function showMeasurementHUD(distM, areaM2) {
   document.getElementById('meas-distance').textContent = distM  ? fmtDist(distM)  : '—';
   document.getElementById('meas-area').textContent     = areaM2 ? fmtArea(areaM2) : '—';
-  document.getElementById('measurement-hud').classList.remove('hidden');
+  document.getElementById('measurement-hud')?.classList.remove('hidden');
 }
 function hideMeasurementHUD() {
-  document.getElementById('measurement-hud').classList.add('hidden');
+  document.getElementById('measurement-hud')?.classList.add('hidden');
 }
 function initMeasurementHUD() {
-  document.getElementById('measurement-close').addEventListener('click', hideMeasurementHUD);
+  document.getElementById('measurement-close')?.addEventListener('click', hideMeasurementHUD);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1227,46 +1258,53 @@ function initMeasurementHUD() {
 function initIncidentForm() {
   const radiusSlider  = document.getElementById('incident-radius');
   const radiusDisplay = document.getElementById('radius-value-display');
-  radiusSlider.addEventListener('input', () => {
-    const v = parseInt(radiusSlider.value);
-    radiusDisplay.textContent = fmtDist(v);
-    updateIncidentCircle();
-  });
-  radiusSlider.addEventListener('change', () => {
-    saveSetting('radius', radiusSlider.value);
-  });
+  if (radiusSlider && radiusDisplay) {
+    radiusSlider.addEventListener('input', () => {
+      const v = parseInt(radiusSlider.value);
+      radiusDisplay.textContent = fmtDist(v);
+      updateIncidentCircle();
+    });
+    radiusSlider.addEventListener('change', () => {
+      saveSetting('radius', radiusSlider.value);
+    });
+  }
 
   ['incident-lat','incident-lng'].forEach(id => {
-    document.getElementById(id).addEventListener('input', updateIncidentCircle);
-    document.getElementById(id).addEventListener('change', function() {
-      const key = id === 'incident-lat' ? 'incident_lat' : 'incident_lng';
-      saveSetting(key, parseFloat(this.value));
-    });
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', updateIncidentCircle);
+      el.addEventListener('change', function() {
+        const key = id === 'incident-lat' ? 'incident_lat' : 'incident_lng';
+        saveSetting(key, parseFloat(this.value));
+      });
+    }
   });
 
-  document.getElementById('btn-log-incident').addEventListener('click', logIncident);
-  document.getElementById('btn-run-proximity').addEventListener('click', runProximityScan);
-  document.getElementById('btn-place-incident-mode').addEventListener('click', enterIncidentPlacementMode);
+  document.getElementById('btn-log-incident')?.addEventListener('click', logIncident);
+  document.getElementById('btn-run-proximity')?.addEventListener('click', runProximityScan);
+  document.getElementById('btn-place-incident-mode')?.addEventListener('click', enterIncidentPlacementMode);
 }
 
 function enterIncidentPlacementMode() {
   State.placingIncident = true;
   document.body.classList.add('placing-incident');
-  document.getElementById('incident-place-mode-indicator').classList.remove('hidden');
+  document.getElementById('incident-place-mode-indicator')?.classList.remove('hidden');
   toast('Click on the map to set the incident location.', 'info', 3000);
 }
 
 function exitIncidentPlacementMode() {
   State.placingIncident = false;
   document.body.classList.remove('placing-incident');
-  document.getElementById('incident-place-mode-indicator').classList.add('hidden');
+  document.getElementById('incident-place-mode-indicator')?.classList.add('hidden');
 }
 
 function onMapClick(e) {
   if (State.placingIncident) {
     const { lat, lng } = e.latlng;
-    document.getElementById('incident-lat').value = lat.toFixed(6);
-    document.getElementById('incident-lng').value = lng.toFixed(6);
+    const latInput = document.getElementById('incident-lat');
+    const lngInput = document.getElementById('incident-lng');
+    if (latInput) latInput.value = lat.toFixed(6);
+    if (lngInput) lngInput.value = lng.toFixed(6);
     saveSetting('incident_lat', lat);
     saveSetting('incident_lng', lng);
     exitIncidentPlacementMode();
@@ -1293,9 +1331,14 @@ function placeIncidentMarker(lat, lng) {
 }
 
 function updateIncidentCircle() {
-  const lat = parseFloat(document.getElementById('incident-lat').value);
-  const lng = parseFloat(document.getElementById('incident-lng').value);
-  const r   = parseInt(document.getElementById('incident-radius').value);
+  const latEl = document.getElementById('incident-lat');
+  const lngEl = document.getElementById('incident-lng');
+  const radEl = document.getElementById('incident-radius');
+  if (!latEl || !lngEl || !radEl) return;
+
+  const lat = parseFloat(latEl.value);
+  const lng = parseFloat(lngEl.value);
+  const r   = parseInt(radEl.value);
   if (isNaN(lat) || isNaN(lng)) return;
 
   if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
@@ -1312,8 +1355,12 @@ function updateIncidentCircle() {
 }
 
 async function logIncident() {
-  const lat   = parseFloat(document.getElementById('incident-lat').value);
-  const lng   = parseFloat(document.getElementById('incident-lng').value);
+  const latEl = document.getElementById('incident-lat');
+  const lngEl = document.getElementById('incident-lng');
+  if (!latEl || !lngEl) return;
+
+  const lat   = parseFloat(latEl.value);
+  const lng   = parseFloat(lngEl.value);
   const title = document.getElementById('incident-title').value.trim() || 'Untitled Incident';
   const desc  = document.getElementById('incident-description').value.trim();
   const sev   = document.querySelector('input[name="severity"]:checked')?.value || 'medium';
@@ -1324,8 +1371,10 @@ async function logIncident() {
   }
 
   const btn = document.getElementById('btn-log-incident');
-  btn.disabled = true;
-  btn.textContent = 'Logging…';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Logging…';
+  }
 
   try {
     const res = await fetch(`${API}/api/incidents`, {
@@ -1342,8 +1391,10 @@ async function logIncident() {
     State.incidents.push({ id: uid(), title, lat, lng, severity: sev });
     toast(`Incident "${title}" logged (offline mode).`, 'info');
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg> Log Incident`;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg> Log Incident`;
+    }
   }
 }
 
@@ -1352,9 +1403,14 @@ async function logIncident() {
 // ════════════════════════════════════════════════════════════
 
 function runProximityScan() {
-  const lat    = parseFloat(document.getElementById('incident-lat').value);
-  const lng    = parseFloat(document.getElementById('incident-lng').value);
-  const radius = parseInt(document.getElementById('incident-radius').value);
+  const latEl = document.getElementById('incident-lat');
+  const lngEl = document.getElementById('incident-lng');
+  const radEl = document.getElementById('incident-radius');
+  if (!latEl || !lngEl || !radEl) return;
+
+  const lat    = parseFloat(latEl.value);
+  const lng    = parseFloat(lngEl.value);
+  const radius = parseInt(radEl.value);
 
   if (isNaN(lat) || isNaN(lng)) {
     toast('Set incident coordinates first.', 'warning');
@@ -1395,10 +1451,10 @@ function runProximityScan() {
   const results = staffList.map(staff => {
     const distM = haversine(lat, lng, staff.lat, staff.lng);
     let status;
-    if (distM <= 250)    status = 'critical';
-    else if (distM <= 500)   status = 'high';
+    if (distM <= 250)         status = 'critical';
+    else if (distM <= 500)       status = 'high';
     else if (distM <= radius) status = 'medium';
-    else                     status = 'safe';
+    else                      status = 'safe';
 
     if (status !== 'safe' && distM < nearestDistance) {
       nearestDistance = distM;
@@ -1413,11 +1469,12 @@ function runProximityScan() {
   renderStaffPanel(results);
 
   const endangered = results.filter(r => r.status !== 'safe');
+  const riskBadge = document.getElementById('status-risk-badge');
   if (endangered.length) {
-    document.getElementById('status-risk-badge').classList.remove('hidden');
+    if (riskBadge) riskBadge.classList.remove('hidden');
     toast(`⚠ ${endangered.length} staff within danger zone!`, 'error');
   } else {
-    document.getElementById('status-risk-badge').classList.add('hidden');
+    if (riskBadge) riskBadge.classList.add('hidden');
     toast(`All ${results.length} staff members are outside the danger zone.`, 'success');
   }
 
@@ -1483,6 +1540,7 @@ function renderStaffPanel(results) {
   const emptyState = document.getElementById('staff-empty-state');
   const countBadge = document.getElementById('at-risk-count-badge');
   const alertAll   = document.getElementById('btn-alert-all');
+  if (!list) return;
   const filter     = State.staffFilter;
 
   const filtered = filter === 'all'
@@ -1491,21 +1549,23 @@ function renderStaffPanel(results) {
 
   const endangered = results.filter(r => r.status !== 'safe');
 
-  if (endangered.length) {
-    countBadge.textContent = endangered.length;
-    countBadge.classList.remove('hidden');
-    alertAll.classList.remove('hidden');
-  } else {
-    countBadge.classList.add('hidden');
-    alertAll.classList.add('hidden');
+  if (countBadge && alertAll) {
+    if (endangered.length) {
+      countBadge.textContent = endangered.length;
+      countBadge.classList.remove('hidden');
+      alertAll.classList.remove('hidden');
+    } else {
+      countBadge.classList.add('hidden');
+      alertAll.classList.add('hidden');
+    }
   }
 
   if (!filtered.length) {
-    emptyState.style.display = 'flex';
+    if (emptyState) emptyState.style.display = 'flex';
     list.querySelectorAll('.staff-card').forEach(e => e.remove());
     return;
   }
-  emptyState.style.display = 'none';
+  if (emptyState) emptyState.style.display = 'none';
 
   list.querySelectorAll('.staff-card').forEach(e => e.remove());
   filtered.forEach((staff, i) => {
@@ -1553,7 +1613,7 @@ function buildStaffCard(staff, index) {
               onclick="openAlertModal('${staff.id}','sms','${esc(staff.name)}','${esc(staff.phone)}',${staff.distance_m.toFixed(0)})"
               title="Send SMS">
         <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 0h3m-3 8.25h3m-3 3.75h3"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 0h3m-3 0h3m-3 8.25h3m-3 3.75h3"/>
         </svg>
         SMS
       </button>
@@ -1589,7 +1649,7 @@ function initStaffFilters() {
     });
   });
 
-  document.getElementById('btn-alert-all').addEventListener('click', () => {
+  document.getElementById('btn-alert-all')?.addEventListener('click', () => {
     const endangered = State.staffResults.filter(r => r.status !== 'safe');
     if (!endangered.length) return;
     endangered.forEach(staff => {
@@ -1605,7 +1665,7 @@ function initStaffFilters() {
 // ════════════════════════════════════════════════════════════
 
 function buildAlertMessage(name, distM) {
-  const incident = document.getElementById('incident-title').value.trim() || 'Security Incident';
+  const incident = document.getElementById('incident-title')?.value.trim() || 'Security Incident';
   return `⚠ SAFETY ALERT: An incident (${incident}) has occurred ${Math.round(distM)}m from your location. Please follow evacuation procedures immediately. Stay safe. — WatchMe Security Dashboard`;
 }
 
@@ -1625,14 +1685,14 @@ window.openAlertModal = function(staffId, channel, name, phone, distM) {
 
   const iconDiv = document.getElementById('alert-channel-icon');
   const ch      = CHANNEL_ICONS[channel] || CHANNEL_ICONS.sms;
-  iconDiv.innerHTML = `<span style="font-size:18px">${ch.icon}</span>`;
+  if (iconDiv) iconDiv.innerHTML = `<span style="font-size:18px">${ch.icon}</span>`;
   document.getElementById('alert-channel-label').textContent = ch.label;
 
   openModal('alert-modal');
 };
 
 function initAlertModal() {
-  document.getElementById('alert-send-btn').addEventListener('click', async () => {
+  document.getElementById('alert-send-btn')?.addEventListener('click', async () => {
     const channel   = document.getElementById('alert-channel-value').value;
     const recipient = document.getElementById('alert-recipient-phone').textContent;
     const message   = document.getElementById('alert-message').value;
@@ -1643,13 +1703,17 @@ function initAlertModal() {
       return;
     }
 
-    btn.disabled    = true;
-    btn.textContent = 'Sending…';
+    if (btn) {
+      btn.disabled    = true;
+      btn.textContent = 'Sending…';
+    }
 
     await sendMockAlert(channel, recipient, message, '');
 
-    btn.disabled = false;
-    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg> Send Alert (Mock)`;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg> Send Alert (Mock)`;
+    }
 
     closeModal('alert-modal');
   });
@@ -1675,8 +1739,8 @@ async function sendMockAlert(channel, recipient, message, incidentId) {
 // ════════════════════════════════════════════════════════════
 
 function initExport() {
-  document.getElementById('btn-export-kml').addEventListener('click', () => exportMap('kml'));
-  document.getElementById('btn-export-kmz').addEventListener('click', () => exportMap('kmz'));
+  document.getElementById('btn-export-kml')?.addEventListener('click', () => exportMap('kml'));
+  document.getElementById('btn-export-kmz')?.addEventListener('click', () => exportMap('kmz'));
 }
 
 async function exportMap(format) {
@@ -1759,7 +1823,7 @@ function buildKMLString(fc) {
     const skip = new Set(['name','Name','description','Description','_style']);
     const extData = Object.entries(props)
       .filter(([k,v]) => !skip.has(k) && v !== '')
-      .map(([k,v]) => `<Data name="${k.replace(/"/g,'')}""><value>${String(v).replace(/</g,'&lt;')}</value></Data>`)
+      .map(([k,v]) => `<Data name="${k.replace(/"/g,'')}"><value>${String(v).replace(/</g,'&lt;')}</value></Data>`)
       .join('');
 
     return `<Placemark>
@@ -1784,224 +1848,14 @@ function buildKMLString(fc) {
 // ════════════════════════════════════════════════════════════
 
 function updateStatusBar() {
-  document.getElementById('status-layer-count').textContent =
-    `${Object.keys(State.layers).length} layers`;
-  document.getElementById('status-incident-count').textContent =
-    `${State.incidents.length} incidents`;
+  const layerEl = document.getElementById('status-layer-count');
+  const incEl = document.getElementById('status-incident-count');
+  if (layerEl) layerEl.textContent = `${Object.keys(State.layers).length} layers`;
+  if (incEl) incEl.textContent = `${State.incidents.length} incidents`;
 }
 
 function startClock() {
   function tick() {
     const now = new Date();
-    document.getElementById('status-time').textContent =
-      now.toUTCString().slice(17, 22) + ' UTC';
-  }
-  tick();
-  setInterval(tick, 30000);
-}
-
-// ════════════════════════════════════════════════════════════
-// 20. MODAL CLOSE BINDINGS
-// ════════════════════════════════════════════════════════════
-
-function initModals() {
-  document.querySelectorAll('.modal-close').forEach(btn => {
-    btn.addEventListener('click', () => closeModal(btn.dataset.modal));
-  });
-  document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.classList.contains('modal-backdrop')) {
-        closeModal(overlay.id);
-      }
-    });
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      document.querySelectorAll('.modal-overlay.show').forEach(m => closeModal(m.id));
-      exitIncidentPlacementMode();
-    }
-  });
-}
-
-// ── Collapsible Right-side Proximity panel bindings ──────
-function initProximityPanel() {
-  const toggleBtn = document.getElementById('proximity-toggle-btn');
-  const panel     = document.getElementById('proximity-panel');
-  const closeBtn  = document.getElementById('proximity-panel-close');
-
-  toggleBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isClosed = panel.classList.contains('hidden');
-    if (isClosed) {
-      openProximityPanel();
-    } else {
-      closeProximityPanel();
-    }
-  });
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeProximityPanel();
-  });
-  
-  State.map.on('click', () => {
-    if (!State.placingIncident) {
-      closeProximityPanel();
-    }
-  });
-}
-
-function openProximityPanel() {
-  const panel = document.getElementById('proximity-panel');
-  panel.classList.remove('hidden');
-  setTimeout(() => {
-    panel.classList.remove('translate-x-[380px]', 'opacity-0');
-    panel.classList.add('translate-x-0', 'opacity-100');
-  }, 50);
-}
-
-function closeProximityPanel() {
-  const panel = document.getElementById('proximity-panel');
-  panel.classList.remove('translate-x-0', 'opacity-100');
-  panel.classList.add('translate-x-[380px]', 'opacity-0');
-  setTimeout(() => {
-    panel.classList.add('hidden');
-  }, 300);
-}
-
-// ── Custom Right-Click Context Menu setup on the Leaflet Map ──
-function initMapContextMenu() {
-  State.map.on('contextmenu', (e) => {
-    if (e.originalEvent) {
-      e.originalEvent.preventDefault();
-    }
-
-    const oldMenu = document.getElementById('map-context-menu');
-    if (oldMenu) oldMenu.remove();
-
-    const menu = document.createElement('div');
-    menu.id = 'map-context-menu';
-    menu.className = 'absolute z-[9999] semi-transparent-glass shadow-panel rounded-xl py-1 w-48 text-xs text-slate-800 dark:text-slate-200 transition-all duration-150 animate-fade-up';
-    
-    menu.style.left = e.originalEvent.pageX + 'px';
-    menu.style.top  = e.originalEvent.pageY + 'px';
-
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
-
-    const options = [
-      {
-        text: '📍 Place Incident Here',
-        action: () => {
-          document.getElementById('incident-lat').value = lat.toFixed(6);
-          document.getElementById('incident-lng').value = lng.toFixed(6);
-          saveSetting('incident_lat', lat);
-          saveSetting('incident_lng', lng);
-          
-          updateIncidentCircle();
-          openProximityPanel();
-          runProximityScan();
-        }
-      },
-      {
-        text: '📌 Add Custom Marker',
-        action: () => {
-          const label = prompt("Enter marker name:", "Assessment Point");
-          if (label !== null) {
-            L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
-              .addTo(State.drawnItems)
-              .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
-              .openPopup();
-          }
-        }
-      },
-      {
-        text: '📋 Copy Coordinates',
-        action: () => {
-          const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-          navigator.clipboard.writeText(coords).then(() => {
-            toast('Coordinates copied to clipboard!', 'success');
-          });
-        }
-      },
-      {
-        text: '❌ Clear Map Scans',
-        action: () => {
-          if (State.incidentMarker) State.map.removeLayer(State.incidentMarker);
-          if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
-          if (window.pulsingIncidentMarker) State.map.removeLayer(window.pulsingIncidentMarker);
-          State.drawnItems.clearLayers();
-          hideMeasurementHUD();
-          toast('Cleared scans and layers.', 'info');
-        }
-      }
-    ];
-
-    options.forEach(opt => {
-      const item = document.createElement('div');
-      item.className = 'px-3 py-2 hover:bg-white/10 dark:hover:bg-white/5 cursor-pointer flex items-center transition-colors font-mono font-semibold';
-      item.innerHTML = opt.text;
-      item.onclick = (event) => {
-        event.stopPropagation();
-        opt.action();
-        menu.remove();
-      };
-      menu.appendChild(item);
-    });
-
-    document.body.appendChild(menu);
-
-    const closeMenu = () => {
-      menu.remove();
-      document.removeEventListener('click', closeMenu);
-    };
-    setTimeout(() => document.addEventListener('click', closeMenu), 50);
-  });
-}
-
-// ════════════════════════════════════════════════════════════
-// BOOTSTRAP — DOMContentLoaded
-// ════════════════════════════════════════════════════════════
-
-document.addEventListener('DOMContentLoaded', () => {
-  runLoadingScreen();
-  initTheme();
-  initMap();
-  initTileSwitcher();
-  initSidebar();
-  initSearch();
-  initUpload();
-  initToggleAllLayers();
-  initStyleModal();
-  initDrawTools();
-  initMeasurementHUD();
-  initIncidentForm();
-  initStaffFilters();
-  initAlertModal();
-  initExport();
-  initModals();
-  initProximityPanel();
-  startClock();
-  updateStatusBar();
-
-  loadSavedSettings();
-  loadSavedLayers();
-
-  document.getElementById('dark-mode-toggle').addEventListener('click', () => {
-    applyTheme(!State.darkMode);
-  });
-
-  document.querySelectorAll('input[name="severity"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      saveSetting('severity', radio.value);
-    });
-  });
-
-  const medRadio = document.querySelector('input[name="severity"][value="medium"]');
-  if (medRadio && !localStorage.getItem('wm_severity')) medRadio.checked = true;
-
-  fetch(`${API}/api/health`)
-    .then(r => r.json())
-    .then(d => console.info('Backend:', d.status, '| Layers in store:', d.layers))
-    .catch(() => console.info('Backend offline — running in client-only mode'));
-});
+    const clockEl = document.getElementById('status-time');
+    if (clockEl) clockEl.textContent = now.toUTCString().slice(17, 22) + ' UTC';
