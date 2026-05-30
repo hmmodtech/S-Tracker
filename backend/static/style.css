@@ -3,7 +3,7 @@
    Custom CSS (supplements Tailwind via CDN)
    ============================================================ */
 
-/* ── FONTS ─────────────────────────────────────────────────── */
+/* ── FONTS & COLOR CONFIGURATION ───────────────────────────── */
 :root {
   --font-display: 'Syne', sans-serif;
   --font-body:    'Manrope', sans-serif;
@@ -58,6 +58,39 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── EYE-COMFORT TYPOGRAPHY OVERRIDES ──────────────────────── */
+body {
+  color: #cbd5e1 !important; /* Soft Slate-300 comfort off-white for dark mode */
+}
+body.light-mode {
+  color: #334155 !important; /* Soft Slate-700 charcoal gray for light mode */
+}
+
+/* Secondary/Muted texts */
+.text-slate-400, .staff-dept, .layer-feature-count {
+  color: #94a3b8 !important; 
+}
+body.light-mode .text-slate-400, 
+body.light-mode .staff-dept, 
+body.light-mode .layer-feature-count {
+  color: #64748b !important; 
+}
+
+/* Main Titles and Headers comfort */
+.text-white, h1, h2, h3, h4, .staff-name, .layer-name, .wm-popup-title {
+  color: #f1f5f9 !important; 
+}
+body.light-mode .text-white,
+body.light-mode h1,
+body.light-mode h2,
+body.light-mode h3,
+body.light-mode h4,
+body.light-mode .staff-name,
+body.light-mode .layer-name,
+body.light-mode .wm-popup-title {
+  color: #0f172a !important; /* Slate-900 comfort dark text instead of pure black */
+}
+
 /* ── SCROLLBAR ──────────────────────────────────────────────── */
 .sidebar-scroll {
   scrollbar-width: thin;
@@ -78,7 +111,7 @@ body {
 }
 
 /* ── GLASSMORPHISM & 3D PANEL EFFECTS ───────────────────────── */
-/* Applied to sidebars, main containers, cards, and modal popups */
+/* Primary sidebars, main containers, cards, and modal popups */
 #sidebar, 
 .layer-card, 
 .staff-card, 
@@ -87,7 +120,7 @@ body {
 .toast,
 #cursor-coords,
 #map-scale-display {
-  background: rgba(15, 23, 42, 0.45) !important;
+  background: rgba(15, 23, 42, 0.65) !important; /* Less transparent background */
   backdrop-filter: blur(14px) !important;
   -webkit-backdrop-filter: blur(14px) !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
@@ -104,39 +137,38 @@ body.light-mode .modal-content,
 body.light-mode .toast,
 body.light-mode #cursor-coords,
 body.light-mode #map-scale-display {
-  background: rgba(255, 255, 255, 0.55) !important;
+  background: rgba(255, 255, 255, 0.8) !important; /* Less transparent background */
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
   border: 1px solid rgba(15, 23, 42, 0.08) !important;
   box-shadow: 0 8px 32px 0 rgba(15, 23, 42, 0.06) !important;
 }
 
-/* ── SEMI-TRANSPARENT GLASS EFFECTS ─────────────────────────── */
-/* Applied to proximity panel and right-click menus for higher transparency */
+/* ── SEMI-TRANSPARENT GLASS EFFECTS (PROXIMITY & CONTEXT MENU) ── */
+/* Applied to the Proximity panel and Right-Click menu for adjusted opacity */
 .semi-transparent-glass,
 #proximity-panel,
 .proximity-panel,
 #map-context-menu {
-  background: rgba(15, 23, 42, 0.25) !important;
-  backdrop-filter: blur(8px) !important;
-  -webkit-backdrop-filter: blur(8px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+  background: rgba(15, 23, 42, 0.65) !important; /* Changed from 0.25 to 0.65 to be less transparent */
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45) !important;
 }
 
 body.light-mode .semi-transparent-glass,
 body.light-mode #proximity-panel,
 body.light-mode .proximity-panel,
 body.light-mode #map-context-menu {
-  background: rgba(255, 255, 255, 0.3) !important;
-  backdrop-filter: blur(8px) !important;
-  -webkit-backdrop-filter: blur(8px) !important;
-  border: 1px solid rgba(15, 23, 42, 0.04) !important;
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04) !important;
+  background: rgba(248, 250, 252, 0.8) !important; /* Changed from 0.30 to 0.80 to be less transparent */
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(15, 23, 42, 0.06) !important;
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.05) !important;
 }
 
 /* ── COMPACT DROPDOWNS ───────────────────────────────────────── */
-/* Target all select boxes and standard dropdown elements */
 select, 
 .dropdown, 
 .field-input select,
@@ -189,7 +221,7 @@ body.placing-incident #map {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23ef444420' stroke='%23ef4444' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23ef4444'/%3E%3Cline x1='16' y1='2' x2='16' y2='8' stroke='%23ef4444' stroke-width='2'/%3E%3Cline x1='16' y1='24' x2='16' y2='30' stroke='%23ef4444' stroke-width='2'/%3E%3Cline x1='2' y1='16' x2='8' y2='16' stroke='%23ef4444' stroke-width='2'/%3E%3Cline x1='24' y1='16' x2='30' y2='16' stroke='%23ef4444' stroke-width='2'/%3E%3C/svg%3E") 16 16, crosshair;
 }
 
-/* Leaflet popup dark style (Overriden by glassmorphism parameters) */
+/* Leaflet popup dark style */
 .leaflet-popup-content-wrapper {
   color: #e2e8f0 !important;
   font-family: var(--font-body) !important;
@@ -641,11 +673,11 @@ body.placing-incident #map {
   border-color: rgba(255,255,255,0.08) !important;
   color: #94a3b8 !important;
 }
-/* Hide the default Leaflet zoom control (we have custom ones) */
+/* Hide the default Leaflet zoom control */
 .leaflet-control-zoom {
   display: none !important;
 }
-/* Hide default attribution (we add our own) */
+/* Hide default attribution */
 .leaflet-control-attribution {
   display: none;
 }
