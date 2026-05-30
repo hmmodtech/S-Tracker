@@ -1,6 +1,28 @@
 /* ============================================================
    WatchMe — Smart Security Dashboard
-   script.js — Complete Application Logic (Supabase Cloud Sync)
+   script.js — Complete Application Logic
+   ============================================================
+   Sections:
+     1.  Constants & State
+     2.  Utilities (toast, modal, format)
+     3.  Theme (dark / light mode)
+     4.  Loading screen
+     5.  Sidebar collapse / resize
+     6.  Map initialisation
+     7.  Tile layer switcher
+     8.  Cursor coordinates
+     9.  Search (geocode + staff)
+    10.  File upload & KML/KMZ/CSV parsing
+    11.  Layer management (add, remove, toggle, style)
+    12.  Drawing tools (Leaflet.draw)
+    13.  Measurement HUD
+    14.  Incident form & placement mode
+    15.  Proximity scan (Haversine + PIP)
+    16.  At-risk staff panel
+    17.  Alert modal + send
+    18.  Export (KML / KMZ via backend)
+    19.  Status bar clock
+    20.  Event binding bootstrap
    ============================================================ */
 
 'use strict';
@@ -9,8 +31,7 @@
 // 1. CONSTANTS & STATE
 // ════════════════════════════════════════════════════════════
 
-// الرابط الموحد للباك إند (Web Service) المسؤول عن تخزين البيانات في سوبابيس
-const API = 'https://s-tracker.onrender.com';          
+const API = '';          // same-origin — FastAPI serves both frontend and API
 const GAZA_CENTER = [31.35, 34.30];
 const GAZA_ZOOM   = 11;
 const MAX_LAYERS  = 15;
@@ -48,7 +69,6 @@ let colorIndex = 0;
 /** Show a toast notification */
 function toast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toast-container');
-  if (!container) return;
   const icons = {
     success: `<svg class="w-4 h-4 text-ops-green flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>`,
     error:   `<svg class="w-4 h-4 text-ops-red flex-none"   fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>`,
@@ -115,7 +135,7 @@ function uid() {
 /** Clamp a number */
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-/** Haversine distance (metres) — Fixed lowercase math bugs */
+/** Haversine distance (metres) — client-side for instant feedback */
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -155,6 +175,7 @@ function applyTheme(dark) {
     document.documentElement.classList.add('dark');
     document.getElementById('icon-sun').classList.remove('hidden');
     document.getElementById('icon-moon').classList.add('hidden');
+    // Dark map tiles
     State.map && State.map.getContainer().querySelector('.leaflet-tile-pane')
       && State.map.getContainer().classList.add('dark-map');
   } else {
@@ -164,7 +185,7 @@ function applyTheme(dark) {
     document.getElementById('icon-moon').classList.remove('hidden');
     State.map && State.map.getContainer().classList.remove('dark-map');
   }
-  saveSetting('theme', dark ? 'dark' : 'light');
+  localStorage.setItem('wm_theme', dark ? 'dark' : 'light');
 }
 
 function initTheme() {
@@ -177,21 +198,19 @@ function initTheme() {
 // ════════════════════════════════════════════════════════════
 
 function runLoadingScreen() {
-  const bar    = document.getElementById('loading-bar');
+  const bar   = document.getElementById('loading-bar');
   const steps = [10, 30, 55, 75, 90, 100];
   let   i     = 0;
   const tick = setInterval(() => {
     if (i < steps.length) {
-      if (bar) bar.style.width = steps[i] + '%';
+      bar.style.width = steps[i] + '%';
       i++;
     } else {
       clearInterval(tick);
       setTimeout(() => {
         const screen = document.getElementById('loading-screen');
-        if (screen) {
-          screen.classList.add('fade-out');
-          setTimeout(() => screen.remove(), 600);
-        }
+        screen.classList.add('fade-out');
+        setTimeout(() => screen.remove(), 600);
       }, 300);
     }
   }, 180);
@@ -202,26 +221,23 @@ function runLoadingScreen() {
 // ════════════════════════════════════════════════════════════
 
 function initSidebar() {
-  const sidebar   = document.getElementById('sidebar');
+  const sidebar     = document.getElementById('sidebar');
   const collapseBtn = document.getElementById('sidebar-collapse-btn');
   const expandBtn   = document.getElementById('sidebar-expand-btn');
 
-  if (collapseBtn && expandBtn && sidebar) {
-    collapseBtn.addEventListener('click', () => {
-      sidebar.classList.add('collapsed');
-      expandBtn.classList.remove('hidden');
-      expandBtn.classList.add('flex');
-    });
-    expandBtn.addEventListener('click', () => {
-      sidebar.classList.remove('collapsed');
-      expandBtn.classList.add('hidden');
-      expandBtn.classList.remove('flex');
-    });
-  }
+  collapseBtn.addEventListener('click', () => {
+    sidebar.classList.add('collapsed');
+    expandBtn.classList.remove('hidden');
+    expandBtn.classList.add('flex');
+  });
+  expandBtn.addEventListener('click', () => {
+    sidebar.classList.remove('collapsed');
+    expandBtn.classList.add('hidden');
+    expandBtn.classList.remove('flex');
+  });
 
   // Drag-to-resize
   const handle = document.getElementById('sidebar-resize-handle');
-  if (!handle || !sidebar) return;
   let dragging  = false;
   let startX, startW;
 
@@ -265,7 +281,7 @@ function initMap() {
   State.drawnItems = new L.FeatureGroup();
   State.map.addLayer(State.drawnItems);
 
-  // Leaflet.draw control
+  // Leaflet.draw control (hidden toolbar — we use custom buttons)
   State.drawControl = new L.Control.Draw({
     edit:   { featureGroup: State.drawnItems },
     draw: {
@@ -293,7 +309,6 @@ function initMap() {
   document.getElementById('map-fit-all').addEventListener('click',   fitAllLayers);
   document.getElementById('map-locate-me').addEventListener('click', locateMe);
 
-  initMapContextMenu();
   updateScaleDisplay();
 }
 
@@ -354,11 +369,10 @@ function setTileLayer(key) {
   State.tileLayer = L.tileLayer(p.url, { attribution: p.attr, maxZoom: p.maxZoom });
   State.tileLayer.addTo(State.map);
 
+  // Update button states
   document.querySelectorAll('.tile-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tile === key);
   });
-  
-  saveSetting('tile', key);
 }
 
 function initTileSwitcher() {
@@ -374,19 +388,19 @@ function initTileSwitcher() {
 function onMapMouseMove(e) {
   const { lat, lng } = e.latlng;
   const fmt = (v, pos, neg) => `${Math.abs(v).toFixed(5)}°${v >= 0 ? pos : neg}`;
-  const el = document.getElementById('cursor-coords');
-  if (el) el.textContent = `${fmt(lat,'N','S')}, ${fmt(lng,'E','W')}`;
+  document.getElementById('cursor-coords').textContent =
+    `${fmt(lat,'N','S')}, ${fmt(lng,'E','W')}`;
 }
 
 function updateScaleDisplay() {
   if (!State.map) return;
   const zoom   = State.map.getZoom();
   const center = State.map.getCenter();
+  // Rough scale: metres per pixel at equator = 156543 * cos(lat) / 2^zoom
   const mpp    = 156543 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
   const mapW   = State.map.getSize().x;
-  const scaleM = Math.round(mpp * mapW * 0.15);
-  const el = document.getElementById('map-scale-text');
-  if (el) el.textContent = fmtDist(scaleM) + ' scale';
+  const scaleM = Math.round(mpp * mapW * 0.15); // ~15% of map width
+  document.getElementById('map-scale-text').textContent = fmtDist(scaleM) + ' scale';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -400,12 +414,11 @@ function initSearch() {
   const clear   = document.getElementById('search-clear');
   const results = document.getElementById('search-results');
 
-  if (!input || !clear || !results) return;
-
   input.addEventListener('input', () => {
     const val = input.value.trim();
     clear.classList.toggle('hidden', !val);
 
+    // Try coordinate parse first (e.g. "31.5, 34.47")
     const coordMatch = val.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
     if (coordMatch) {
       const lat = parseFloat(coordMatch[1]);
@@ -420,6 +433,7 @@ function initSearch() {
       }
     }
 
+    // Staff name search across loaded layers
     const staffMatches = searchStaffInLayers(val);
     if (staffMatches.length > 0) {
       showSearchResult(staffMatches.slice(0, 6).map(f => ({
@@ -430,6 +444,7 @@ function initSearch() {
       return;
     }
 
+    // Geocode via Nominatim proxy
     clearTimeout(searchDebounce);
     if (val.length < 3) { results.classList.add('hidden'); return; }
     searchDebounce = setTimeout(() => geocodeSearch(val), 500);
@@ -441,6 +456,7 @@ function initSearch() {
     results.classList.add('hidden');
   });
 
+  // Close on outside click
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#global-search') && !e.target.closest('#search-results')) {
       results.classList.add('hidden');
@@ -478,14 +494,13 @@ async function geocodeSearch(query) {
     const data = await res.json();
     showSearchResult(Array.isArray(data) ? data : []);
   } catch {
-    // Silently fail
+    // Silently fail — Nominatim may be unavailable offline
   }
 }
 
 function showSearchResult(results) {
   const container = document.getElementById('search-results');
   const list      = document.getElementById('search-results-list');
-  if (!container || !list) return;
   if (!results.length) { container.classList.add('hidden'); return; }
 
   list.innerHTML = results.map((r, i) => `
@@ -499,23 +514,22 @@ function showSearchResult(results) {
     </button>
   `).join('');
 
+  // Store results for click handler
   container._results = results;
   container.classList.remove('hidden');
 }
 
 window.selectSearchResult = function(index) {
   const container = document.getElementById('search-results');
-  const r = container?._results?.[index];
+  const r = container._results?.[index];
   if (!r) return;
   const lat = parseFloat(r.lat);
   const lng = parseFloat(r.lon);
   State.map.setView([lat, lng], 15, { animate: true });
-  if (container) container.classList.add('hidden');
-  const searchInput = document.getElementById('global-search');
-  if (searchInput) searchInput.value = '';
-  const clearBtn = document.getElementById('search-clear');
-  if (clearBtn) clearBtn.classList.add('hidden');
-  
+  container.classList.add('hidden');
+  document.getElementById('global-search').value = '';
+  document.getElementById('search-clear').classList.add('hidden');
+  // Drop a temporary marker
   L.marker([lat, lng], { icon: createCustomMarkerIcon('#06b6d4') })
     .addTo(State.map)
     .bindPopup(`<div class="wm-popup"><div class="wm-popup-header">
@@ -535,8 +549,7 @@ function initUpload() {
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
 
-  if (!dropZone || !fileInput) return;
-
+  // Click the hidden input when drop zone clicked (not on the input itself)
   dropZone.addEventListener('click', (e) => {
     if (e.target !== fileInput) fileInput.click();
   });
@@ -549,6 +562,7 @@ function initUpload() {
     fileInput.value = '';
   });
 
+  // Drag & drop
   dropZone.addEventListener('dragenter', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
   dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); });
   dropZone.addEventListener('dragleave', (e) => {
@@ -563,6 +577,7 @@ function initUpload() {
     else toast('Only .kml, .kmz and .csv files are supported.', 'warning');
   });
 
+  // Global drag-over prevention (don't let browser try to navigate)
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop',     (e) => e.preventDefault());
 }
@@ -588,6 +603,7 @@ async function processFile(file) {
       geojson = await parseCSV(file);
       setUploadProgress(file.name, 100);
     } else if (ext === 'kml') {
+      // Try backend first; fall back to client-side toGeoJSON
       try {
         geojson = await uploadToBackend(file, (p) => setUploadProgress(file.name, p));
       } catch {
@@ -601,6 +617,7 @@ async function processFile(file) {
       try {
         geojson = await uploadToBackend(file, (p) => setUploadProgress(file.name, p));
       } catch {
+        // Client-side KMZ fallback via JSZip + toGeoJSON
         geojson = await parseKMZClientSide(file);
         setUploadProgress(file.name, 100);
       }
@@ -629,6 +646,7 @@ async function processFile(file) {
 async function uploadToBackend(file, onProgress) {
   const form = new FormData();
   form.append('file', file);
+  // Use XMLHttpRequest for progress tracking
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${API}/api/upload`);
@@ -652,6 +670,7 @@ async function uploadToBackend(file, onProgress) {
 async function parseKMZClientSide(file) {
   const buf    = await file.arrayBuffer();
   const zip    = await JSZip.loadAsync(buf);
+  // Find the root KML entry
   let kmlEntry = zip.file('doc.kml');
   if (!kmlEntry) {
     const kmlFiles = Object.keys(zip.files).filter(n => n.toLowerCase().endsWith('.kml'));
@@ -700,9 +719,9 @@ async function parseCSV(file) {
   return { type: 'FeatureCollection', features };
 }
 
+// Upload progress UI
 function showUploadProgress(filename, pct) {
   const container = document.getElementById('upload-progress-container');
-  if (!container) return;
   container.classList.remove('hidden');
   let item = container.querySelector(`[data-file="${CSS.escape(filename)}"]`);
   if (!item) {
@@ -725,11 +744,18 @@ function setUploadProgress(filename, pct) {
   if (pct >= 100) setTimeout(() => removeUploadProgress(filename), 1500);
 }
 
+function removeUploadProgress(filename) {
+  const item = document.querySelector(`[data-file="${CSS.escape(filename)}"]`);
+  if (item) item.remove();
+  const container = document.getElementById('upload-progress-container');
+  if (!container.children.length) container.classList.add('hidden');
+}
+
 // ════════════════════════════════════════════════════════════
 // 11. LAYER MANAGEMENT
 // ════════════════════════════════════════════════════════════
 
-function addLayer(id, meta, geojson, autoFit = true) {
+function addLayer(id, meta, geojson) {
   const color        = meta.color || LAYER_COLORS[0];
   const layerStyle   = { color, fillColor: color, weight: 2, fillOpacity: 0.18, opacity: 1 };
   const leafletGroup = buildLeafletGroup(id, geojson, layerStyle);
@@ -740,12 +766,11 @@ function addLayer(id, meta, geojson, autoFit = true) {
   updateLayerCountBadge();
   updateStatusBar();
 
-  if (autoFit) {
-    try {
-      const bounds = leafletGroup.getBounds();
-      if (bounds.isValid()) State.map.fitBounds(bounds.pad(0.15), { maxZoom: 15 });
-    } catch { }
-  }
+  // Auto-fit to new layer
+  try {
+    const bounds = leafletGroup.getBounds();
+    if (bounds.isValid()) State.map.fitBounds(bounds.pad(0.15), { maxZoom: 15 });
+  } catch { /* empty group */ }
 }
 
 function buildLeafletGroup(layerId, geojson, style) {
@@ -762,6 +787,7 @@ function buildLeafletGroup(layerId, geojson, style) {
       return L.marker(latlng, { icon: createCustomMarkerIcon(iconColor) });
     },
     onEachFeature: (feature, layer) => {
+      const props = feature.properties || {};
       layer.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
         showFeaturePopup(feature, layer, layerId, e.latlng);
@@ -776,7 +802,9 @@ function showFeaturePopup(feature, leafletLayer, layerId, latlng) {
   const layerMeta = State.layers[layerId]?.meta || {};
   const name     = props.name || props.Name || 'Unnamed Feature';
   const desc     = props.description || props.Description || '';
+  const style    = State.layers[layerId]?.style || {};
 
+  // Filter display properties
   const skip = new Set(['name','Name','description','Description','_style']);
   const dispProps = Object.entries(props).filter(([k]) => !skip.has(k) && k && props[k] !== '');
 
@@ -825,8 +853,6 @@ function removeLayer(id) {
   renderLayerList();
   updateLayerCountBadge();
   updateStatusBar();
-  
-  fetch(`${API}/api/layers/${id}`, { method: 'DELETE' }).catch(err => console.error(err));
 }
 
 function toggleLayerVisibility(id) {
@@ -864,23 +890,26 @@ function applyLayerStyle(id, newStyle) {
 function renderLayerList() {
   const list       = document.getElementById('layer-list');
   const emptyState = document.getElementById('layer-empty-state');
-  if (!list) return;
   const layerIds   = Object.keys(State.layers);
 
   if (!layerIds.length) {
-    if (emptyState) emptyState.style.display = 'flex';
+    emptyState.style.display = 'flex';
+    // Remove all dynamic cards
     list.querySelectorAll('.layer-card').forEach(el => el.remove());
     return;
   }
-  if (emptyState) emptyState.style.display = 'none';
+  emptyState.style.display = 'none';
 
+  // Rebuild only changed cards for performance
   const existingIds = new Set(Array.from(list.querySelectorAll('.layer-card')).map(el => el.dataset.id));
   const currentIds  = new Set(layerIds);
 
+  // Remove stale
   existingIds.forEach(id => {
     if (!currentIds.has(id)) list.querySelector(`[data-id="${id}"]`)?.remove();
   });
 
+  // Add/update
   layerIds.forEach((id, i) => {
     const layer = State.layers[id];
     const existing = list.querySelector(`[data-id="${id}"]`);
@@ -903,25 +932,33 @@ function buildLayerCardHTML(id, layer, index) {
 
   return `<div class="layer-card ${vis ? '' : 'layer-hidden'} animate-fade-up" data-id="${id}" style="animation-delay:${index * 40}ms">
     <div class="layer-card-header">
+      <!-- Visibility toggle -->
       <label class="toggle-switch" title="${vis ? 'Hide layer' : 'Show layer'}">
         <input type="checkbox" ${vis ? 'checked' : ''}
                onchange="toggleLayerVisibility('${id}')" />
         <span class="toggle-track"></span>
       </label>
+      <!-- Color dot -->
       <span class="layer-color-dot" style="background:${color}; border-color:${color}40"></span>
+      <!-- Name -->
       <span class="layer-name" title="${esc(layer.meta.name)}">${esc(layer.meta.name)}</span>
+      <!-- Feature count -->
       <span class="layer-feature-count">${count}</span>
+      <!-- Action buttons -->
       <div class="layer-actions">
+        <!-- Style editor -->
         <button class="layer-action-btn" onclick="openLayerStyleModal('${id}')" title="Edit style">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.53 16.122a3 3 0 00-5.78 1.128 2.25 2.25 0 01-2.4 2.245 4.5 4.5 0 008.4-2.245c0-.399-.078-.78-.22-1.128zm0 0a15.998 15.998 0 003.388-1.62m-5.043-.025a15.994 15.994 0 011.622-3.395m3.42 3.42a15.995 15.995 0 004.764-4.648l3.876-5.814a1.151 1.151 0 00-1.597-1.597L14.146 6.32a15.996 15.996 0 00-4.649 4.763m3.42 3.42a6.776 6.776 0 00-3.42-3.42"/>
           </svg>
         </button>
+        <!-- Fit to layer -->
         <button class="layer-action-btn" onclick="fitToLayer('${id}')" title="Fit to layer">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
           </svg>
         </button>
+        <!-- Delete -->
         <button class="layer-action-btn danger" onclick="removeLayer('${id}')" title="Delete layer">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
@@ -929,6 +966,7 @@ function buildLayerCardHTML(id, layer, index) {
         </button>
       </div>
     </div>
+    <!-- Opacity slider -->
     <div class="px-3 pb-2.5 flex items-center gap-2">
       <span class="text-[9px] font-mono text-slate-600 w-12">Opacity</span>
       <input type="range" min="0.05" max="1" step="0.05" value="${op}"
@@ -951,8 +989,7 @@ window.openLayerStyleModal       = openLayerStyleModal;
 
 function updateLayerCountBadge() {
   const count = Object.keys(State.layers).length;
-  const el = document.getElementById('layer-count-badge');
-  if (el) el.textContent = `${count} / ${MAX_LAYERS}`;
+  document.getElementById('layer-count-badge').textContent = `${count} / ${MAX_LAYERS}`;
 }
 
 function fitAllLayers() {
@@ -978,30 +1015,26 @@ function locateMe() {
 }
 
 function initToggleAllLayers() {
-  const toggleBtn = document.getElementById('toggle-all-layers');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', function() {
-      State.allLayersOn = !State.allLayersOn;
-      this.textContent = State.allLayersOn ? 'All OFF' : 'All ON';
-      Object.keys(State.layers).forEach(id => {
-        State.layers[id].visible = State.allLayersOn;
-        if (State.allLayersOn) State.map.addLayer(State.layers[id].leafletGroup);
-        else                   State.map.removeLayer(State.layers[id].leafletGroup);
-      });
-      renderLayerList();
+  document.getElementById('toggle-all-layers').addEventListener('click', function() {
+    State.allLayersOn = !State.allLayersOn;
+    this.textContent = State.allLayersOn ? 'All OFF' : 'All ON';
+    Object.keys(State.layers).forEach(id => {
+      State.layers[id].visible = State.allLayersOn;
+      if (State.allLayersOn) State.map.addLayer(State.layers[id].leafletGroup);
+      else                   State.map.removeLayer(State.layers[id].leafletGroup);
     });
-  }
+    renderLayerList();
+  });
 
-  const deleteBtn = document.getElementById('delete-all-layers');
-  if (deleteBtn) {
-    deleteBtn.addEventListener('click', () => {
-      if (!Object.keys(State.layers).length) return;
-      if (!confirm('Delete all layers?')) return;
-      Object.keys(State.layers).forEach(id => removeLayer(id));
-      toast('All layers removed.', 'info');
-    });
-  }
+  document.getElementById('delete-all-layers').addEventListener('click', () => {
+    if (!Object.keys(State.layers).length) return;
+    if (!confirm('Delete all layers?')) return;
+    Object.keys(State.layers).forEach(id => removeLayer(id));
+    toast('All layers removed.', 'info');
+  });
 }
+
+// ── Layer style modal ──────────────────────────────────────
 
 function openLayerStyleModal(id) {
   const layer = State.layers[id];
@@ -1022,27 +1055,24 @@ function openLayerStyleModal(id) {
 }
 
 function initStyleModal() {
+  // Live preview as sliders/pickers change
   ['style-stroke-color','style-fill-color'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener('input', function() {
-        const hexId = id === 'style-stroke-color' ? 'style-stroke-hex' : 'style-fill-hex';
-        document.getElementById(hexId).textContent = this.value;
-      });
-    }
+    document.getElementById(id).addEventListener('input', function() {
+      const hexId = id === 'style-stroke-color' ? 'style-stroke-hex' : 'style-fill-hex';
+      document.getElementById(hexId).textContent = this.value;
+    });
   });
-  
-  document.getElementById('style-weight')?.addEventListener('input', function() {
+  document.getElementById('style-weight').addEventListener('input', function() {
     document.getElementById('style-weight-val').textContent = this.value + 'px';
   });
-  document.getElementById('style-fill-opacity')?.addEventListener('input', function() {
+  document.getElementById('style-fill-opacity').addEventListener('input', function() {
     document.getElementById('style-fill-opacity-val').textContent = parseFloat(this.value).toFixed(2);
   });
-  document.getElementById('style-layer-opacity')?.addEventListener('input', function() {
+  document.getElementById('style-layer-opacity').addEventListener('input', function() {
     document.getElementById('style-layer-opacity-val').textContent = parseFloat(this.value).toFixed(2);
   });
 
-  document.getElementById('style-apply-btn')?.addEventListener('click', () => {
+  document.getElementById('style-apply-btn').addEventListener('click', () => {
     const id = document.getElementById('style-modal-layer-id').value;
     applyLayerStyle(id, {
       color:       document.getElementById('style-stroke-color').value,
@@ -1069,95 +1099,12 @@ function initDrawTools() {
   });
 }
 
-// ── Database Saved Settings Logic ─────────────────────────
-async function saveSetting(key, value) {
-  localStorage.setItem('wm_' + key, value);
-  try {
-    await fetch(`${API}/api/settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: 'wm_' + key, value: String(value) })
-    });
-  } catch (e) {
-    console.warn(`Local save only for setting: ${key}. Server offline.`);
-  }
-}
-
-async function loadSavedSettings() {
-  let dbSettings = {};
-  try {
-    const res = await fetch(`${API}/api/settings`);
-    dbSettings = await res.json();
-  } catch (e) {
-    console.warn("Could not retrieve settings from SQLite DB. Restoring local values.");
-  }
-
-  const settings = {};
-  for (let key in localStorage) {
-    if (key.startsWith('wm_')) {
-      settings[key] = localStorage.getItem(key);
-    }
-  }
-  Object.assign(settings, dbSettings);
-
-  if (settings.wm_theme) {
-    applyTheme(settings.wm_theme === 'dark');
-  }
-  if (settings.wm_tile) {
-    setTileLayer(settings.wm_tile);
-  }
-  if (settings.wm_radius) {
-    const r = parseInt(settings.wm_radius);
-    const slider = document.getElementById('incident-radius');
-    if (slider) slider.value = r;
-    const disp = document.getElementById('radius-value-display');
-    if (disp) disp.textContent = fmtDist(r);
-  }
-  if (settings.wm_severity) {
-    const radio = document.querySelector(`input[name="severity"][value="${settings.wm_severity}"]`);
-    if (radio) radio.checked = true;
-  }
-  if (settings.wm_incident_lat && settings.wm_incident_lng) {
-    const lat = parseFloat(settings.wm_incident_lat);
-    const lng = parseFloat(settings.wm_incident_lng);
-    const latInput = document.getElementById('incident-lat');
-    const lngInput = document.getElementById('incident-lng');
-    if (latInput) latInput.value = lat.toFixed(6);
-    if (lngInput) lngInput.value = lng.toFixed(6);
-    updateIncidentCircle();
-  }
-}
-
-async function loadSavedLayers() {
-  try {
-    const res = await fetch(`${API}/api/layers`);
-    if (!res.ok) return;
-    const layersMeta = await res.json();
-    
-    for (const meta of layersMeta) {
-      const layerRes = await fetch(`${API}/api/layers/${meta.id}`);
-      if (!layerRes.ok) continue;
-      const layerData = await layerRes.json();
-      
-      const color = LAYER_COLORS[colorIndex % LAYER_COLORS.length];
-      colorIndex++;
-
-      addLayer(meta.id, {
-        name:  layerData.name,
-        color: color,
-        file:  layerData.name,
-      }, layerData.geojson, false);
-    }
-  } catch (e) {
-    console.error("Error auto-loading database layers:", e);
-  }
-}
-
 function activateDrawTool(btn) {
   const tool = btn.dataset.draw;
+  // Deactivate current
   deactivateAllDrawTools();
 
-  if (State.activeDrawTool === tool) return;
+  if (State.activeDrawTool === tool) return; // toggle off
 
   State.activeDrawTool = tool;
   btn.classList.add('active');
@@ -1194,12 +1141,11 @@ function showDrawModeIndicator(tool) {
     edit:     'Edit mode — drag handles to reshape',
     delete:   'Delete mode — click features to remove',
   };
-  const labelEl = document.getElementById('draw-mode-label');
-  if (labelEl) labelEl.textContent = labels[tool] || 'Drawing active';
-  document.getElementById('draw-mode-indicator')?.classList.remove('hidden');
+  document.getElementById('draw-mode-label').textContent = labels[tool] || 'Drawing active';
+  document.getElementById('draw-mode-indicator').classList.remove('hidden');
 }
 function hideDrawModeIndicator() {
-  document.getElementById('draw-mode-indicator')?.classList.add('hidden');
+  document.getElementById('draw-mode-indicator').classList.add('hidden');
 }
 
 function onDrawCreated(e) {
@@ -1207,6 +1153,7 @@ function onDrawCreated(e) {
   State.drawnItems.addLayer(layer);
   deactivateAllDrawTools();
 
+  // Compute area / distance for HUD
   if (e.layerType === 'polyline') {
     const latlngs = layer.getLatLngs();
     let total = 0;
@@ -1224,7 +1171,7 @@ function onDrawCreated(e) {
   }
 }
 
-function onDrawEdited()  { }
+function onDrawEdited()  { /* handle edited layers if needed */ }
 function onDrawDeleted() { hideMeasurementHUD(); }
 
 // ════════════════════════════════════════════════════════════
@@ -1234,13 +1181,13 @@ function onDrawDeleted() { hideMeasurementHUD(); }
 function showMeasurementHUD(distM, areaM2) {
   document.getElementById('meas-distance').textContent = distM  ? fmtDist(distM)  : '—';
   document.getElementById('meas-area').textContent     = areaM2 ? fmtArea(areaM2) : '—';
-  document.getElementById('measurement-hud')?.classList.remove('hidden');
+  document.getElementById('measurement-hud').classList.remove('hidden');
 }
 function hideMeasurementHUD() {
-  document.getElementById('measurement-hud')?.classList.add('hidden');
+  document.getElementById('measurement-hud').classList.add('hidden');
 }
 function initMeasurementHUD() {
-  document.getElementById('measurement-close')?.addEventListener('click', hideMeasurementHUD);
+  document.getElementById('measurement-close').addEventListener('click', hideMeasurementHUD);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1248,62 +1195,52 @@ function initMeasurementHUD() {
 // ════════════════════════════════════════════════════════════
 
 function initIncidentForm() {
+  // Radius slider live preview
   const radiusSlider  = document.getElementById('incident-radius');
   const radiusDisplay = document.getElementById('radius-value-display');
-  if (radiusSlider && radiusDisplay) {
-    radiusSlider.addEventListener('input', () => {
-      const v = parseInt(radiusSlider.value);
-      radiusDisplay.textContent = fmtDist(v);
-      updateIncidentCircle();
-    });
-    radiusSlider.addEventListener('change', () => {
-      saveSetting('radius', radiusSlider.value);
-    });
-  }
-
-  ['incident-lat','incident-lng'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener('input', updateIncidentCircle);
-      el.addEventListener('change', function() {
-        const key = id === 'incident-lat' ? 'incident_lat' : 'incident_lng';
-        saveSetting(key, parseFloat(this.value));
-      });
-    }
+  radiusSlider.addEventListener('input', () => {
+    const v = parseInt(radiusSlider.value);
+    radiusDisplay.textContent = fmtDist(v);
+    updateIncidentCircle();
   });
 
-  document.getElementById('btn-log-incident')?.addEventListener('click', logIncident);
-  document.getElementById('btn-run-proximity')?.addEventListener('click', runProximityScan);
-  document.getElementById('btn-place-incident-mode')?.addEventListener('click', enterIncidentPlacementMode);
+  // Lat/Lng input → update circle
+  ['incident-lat','incident-lng'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateIncidentCircle);
+  });
+
+  // Log incident button
+  document.getElementById('btn-log-incident').addEventListener('click', logIncident);
+
+  // Scan area button
+  document.getElementById('btn-run-proximity').addEventListener('click', runProximityScan);
+
+  // Click-on-map mode
+  document.getElementById('btn-place-incident-mode').addEventListener('click', enterIncidentPlacementMode);
 }
 
 function enterIncidentPlacementMode() {
   State.placingIncident = true;
   document.body.classList.add('placing-incident');
-  document.getElementById('incident-place-mode-indicator')?.classList.remove('hidden');
+  document.getElementById('incident-place-mode-indicator').classList.remove('hidden');
   toast('Click on the map to set the incident location.', 'info', 3000);
 }
 
 function exitIncidentPlacementMode() {
   State.placingIncident = false;
   document.body.classList.remove('placing-incident');
-  document.getElementById('incident-place-mode-indicator')?.classList.add('hidden');
+  document.getElementById('incident-place-mode-indicator').classList.add('hidden');
 }
 
 function onMapClick(e) {
-  if (State.placingIncident) {
-    const { lat, lng } = e.latlng;
-    const latInput = document.getElementById('incident-lat');
-    const lngInput = document.getElementById('incident-lng');
-    if (latInput) latInput.value = lat.toFixed(6);
-    if (lngInput) lngInput.value = lng.toFixed(6);
-    saveSetting('incident_lat', lat);
-    saveSetting('incident_lng', lng);
-    exitIncidentPlacementMode();
-    placeIncidentMarker(lat, lng);
-    updateIncidentCircle();
-    toast(`Incident placed at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'success', 2500);
-  }
+  if (!State.placingIncident) return;
+  const { lat, lng } = e.latlng;
+  document.getElementById('incident-lat').value = lat.toFixed(6);
+  document.getElementById('incident-lng').value = lng.toFixed(6);
+  exitIncidentPlacementMode();
+  placeIncidentMarker(lat, lng);
+  updateIncidentCircle();
+  toast(`Incident placed at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'success', 2500);
 }
 
 function placeIncidentMarker(lat, lng) {
@@ -1323,14 +1260,9 @@ function placeIncidentMarker(lat, lng) {
 }
 
 function updateIncidentCircle() {
-  const latEl = document.getElementById('incident-lat');
-  const lngEl = document.getElementById('incident-lng');
-  const radEl = document.getElementById('incident-radius');
-  if (!latEl || !lngEl || !radEl) return;
-
-  const lat = parseFloat(latEl.value);
-  const lng = parseFloat(lngEl.value);
-  const r   = parseInt(radEl.value);
+  const lat = parseFloat(document.getElementById('incident-lat').value);
+  const lng = parseFloat(document.getElementById('incident-lng').value);
+  const r   = parseInt(document.getElementById('incident-radius').value);
   if (isNaN(lat) || isNaN(lng)) return;
 
   if (State.incidentCircle) State.map.removeLayer(State.incidentCircle);
@@ -1347,12 +1279,8 @@ function updateIncidentCircle() {
 }
 
 async function logIncident() {
-  const latEl = document.getElementById('incident-lat');
-  const lngEl = document.getElementById('incident-lng');
-  if (!latEl || !lngEl) return;
-
-  const lat   = parseFloat(latEl.value);
-  const lng   = parseFloat(lngEl.value);
+  const lat   = parseFloat(document.getElementById('incident-lat').value);
+  const lng   = parseFloat(document.getElementById('incident-lng').value);
   const title = document.getElementById('incident-title').value.trim() || 'Untitled Incident';
   const desc  = document.getElementById('incident-description').value.trim();
   const sev   = document.querySelector('input[name="severity"]:checked')?.value || 'medium';
@@ -1363,10 +1291,8 @@ async function logIncident() {
   }
 
   const btn = document.getElementById('btn-log-incident');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Logging…';
-  }
+  btn.disabled = true;
+  btn.textContent = 'Logging…';
 
   try {
     const res = await fetch(`${API}/api/incidents`, {
@@ -1380,13 +1306,12 @@ async function logIncident() {
     updateStatusBar();
     toast(`Incident "${title}" logged.`, 'success');
   } catch {
+    // Backend may be offline in dev; log locally
     State.incidents.push({ id: uid(), title, lat, lng, severity: sev });
     toast(`Incident "${title}" logged (offline mode).`, 'info');
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg> Log Incident`;
-    }
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg> Log Incident`;
   }
 }
 
@@ -1395,14 +1320,9 @@ async function logIncident() {
 // ════════════════════════════════════════════════════════════
 
 function runProximityScan() {
-  const latEl = document.getElementById('incident-lat');
-  const lngEl = document.getElementById('incident-lng');
-  const radEl = document.getElementById('incident-radius');
-  if (!latEl || !lngEl || !radEl) return;
-
-  const lat    = parseFloat(latEl.value);
-  const lng    = parseFloat(lngEl.value);
-  const radius = parseInt(radEl.value);
+  const lat    = parseFloat(document.getElementById('incident-lat').value);
+  const lng    = parseFloat(document.getElementById('incident-lng').value);
+  const radius = parseInt(document.getElementById('incident-radius').value);
 
   if (isNaN(lat) || isNaN(lng)) {
     toast('Set incident coordinates first.', 'warning');
@@ -1413,6 +1333,7 @@ function runProximityScan() {
     return;
   }
 
+  // Collect all Point features across all layers
   const staffList = [];
   for (const [layerId, layer] of Object.entries(State.layers)) {
     const features = layer.geojson?.features || [];
@@ -1439,19 +1360,14 @@ function runProximityScan() {
     return;
   }
 
-  let nearestDistance = Infinity;
+  // Run proximity check locally
   const results = staffList.map(staff => {
     const distM = haversine(lat, lng, staff.lat, staff.lng);
     let status;
-    if (distM <= 250)         status = 'critical';
-    else if (distM <= 500)       status = 'high';
+    if (distM <= 250)    status = 'critical';
+    else if (distM <= 500)   status = 'high';
     else if (distM <= radius) status = 'medium';
-    else                      status = 'safe';
-
-    if (status !== 'safe' && distM < nearestDistance) {
-      nearestDistance = distM;
-    }
-
+    else                     status = 'safe';
     return { ...staff, distance_m: distM, status };
   });
 
@@ -1461,46 +1377,23 @@ function runProximityScan() {
   renderStaffPanel(results);
 
   const endangered = results.filter(r => r.status !== 'safe');
-  const riskBadge = document.getElementById('status-risk-badge');
   if (endangered.length) {
-    if (riskBadge) riskBadge.classList.remove('hidden');
+    document.getElementById('status-risk-badge').classList.remove('hidden');
     toast(`⚠ ${endangered.length} staff within danger zone!`, 'error');
   } else {
-    if (riskBadge) riskBadge.classList.add('hidden');
+    document.getElementById('status-risk-badge').classList.add('hidden');
     toast(`All ${results.length} staff members are outside the danger zone.`, 'success');
   }
 
-  addIncidentPulsingCircle(lat, lng, nearestDistance);
+  // Flash at-risk markers on the map
   flashAtRiskMarkers(lat, lng, radius);
-}
 
-function addIncidentPulsingCircle(lat, lng, nearestDistance) {
-  let pulseClass = 'pulse-green';
-  if (nearestDistance <= 250) {
-    pulseClass = 'pulse-red';
-  } else if (nearestDistance <= 500) {
-    pulseClass = 'pulse-orange';
-  } else if (nearestDistance <= 1000) {
-    pulseClass = 'pulse-yellow';
-  } else {
-    pulseClass = 'pulse-green';
-  }
-
-  const pulsingIcon = L.divIcon({
-    className: `pulsing-marker ${pulseClass}`,
-    html: '<div class="pulsing-ring"></div><div class="pulsing-dot"></div>',
-    iconSize: [48, 48],
-    iconAnchor: [24, 24]
-  });
-
-  if (window.pulsingIncidentMarker) {
-    State.map.removeLayer(window.pulsingIncidentMarker);
-  }
-
-  window.pulsingIncidentMarker = L.marker([lat, lng], { icon: pulsingIcon }).addTo(State.map);
+  // Scroll to staff panel
+  document.getElementById('staff-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function flashAtRiskMarkers(incLat, incLng, radiusM) {
+  // Add temporary flash circle markers for at-risk staff
   const endangered = State.staffResults.filter(r => r.status !== 'safe');
   if (!endangered.length) return;
 
@@ -1513,10 +1406,12 @@ function flashAtRiskMarkers(incLat, incLng, radiusM) {
         fillOpacity: 0.5,
         weight:      2,
       }).addTo(State.map);
+      // Fade out after 2s
       setTimeout(() => State.map.removeLayer(circle), 2000);
     }, i * 120);
   });
 
+  // Fit map to show incident + all at-risk
   const points = endangered.map(s => [s.lat, s.lng]);
   points.push([incLat, incLng]);
   const bounds = L.latLngBounds(points);
@@ -1532,7 +1427,6 @@ function renderStaffPanel(results) {
   const emptyState = document.getElementById('staff-empty-state');
   const countBadge = document.getElementById('at-risk-count-badge');
   const alertAll   = document.getElementById('btn-alert-all');
-  if (!list) return;
   const filter     = State.staffFilter;
 
   const filtered = filter === 'all'
@@ -1541,24 +1435,24 @@ function renderStaffPanel(results) {
 
   const endangered = results.filter(r => r.status !== 'safe');
 
-  if (countBadge && alertAll) {
-    if (endangered.length) {
-      countBadge.textContent = endangered.length;
-      countBadge.classList.remove('hidden');
-      alertAll.classList.remove('hidden');
-    } else {
-      countBadge.classList.add('hidden');
-      alertAll.classList.add('hidden');
-    }
+  // Badge
+  if (endangered.length) {
+    countBadge.textContent = endangered.length;
+    countBadge.classList.remove('hidden');
+    alertAll.classList.remove('hidden');
+  } else {
+    countBadge.classList.add('hidden');
+    alertAll.classList.add('hidden');
   }
 
   if (!filtered.length) {
-    if (emptyState) emptyState.style.display = 'flex';
+    emptyState.style.display = 'flex';
     list.querySelectorAll('.staff-card').forEach(e => e.remove());
     return;
   }
-  if (emptyState) emptyState.style.display = 'none';
+  emptyState.style.display = 'none';
 
+  // Rebuild list
   list.querySelectorAll('.staff-card').forEach(e => e.remove());
   filtered.forEach((staff, i) => {
     const card = buildStaffCard(staff, i);
@@ -1591,6 +1485,7 @@ function buildStaffCard(staff, index) {
           <p class="text-[9px] font-mono text-slate-500 mt-0.5">${label}</p>
         </div>
       </div>
+      <!-- Fly-to button -->
       <button onclick="flyToStaff(${staff.lat},${staff.lng})"
               class="mt-2 w-full text-[10px] font-mono text-slate-500 hover:text-brand-300 flex items-center gap-1.5 transition-colors">
         <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1600,12 +1495,13 @@ function buildStaffCard(staff, index) {
         ${staff.lat.toFixed(5)}, ${staff.lng.toFixed(5)}
       </button>
     </div>
+    <!-- Alert buttons -->
     <div class="staff-alert-actions">
       <button class="alert-btn sms"
               onclick="openAlertModal('${staff.id}','sms','${esc(staff.name)}','${esc(staff.phone)}',${staff.distance_m.toFixed(0)})"
               title="Send SMS">
         <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 0h3m-3 0h3m-3 8.25h3m-3 3.75h3"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 8.25h3m-3 3.75h3"/>
         </svg>
         SMS
       </button>
@@ -1641,7 +1537,7 @@ function initStaffFilters() {
     });
   });
 
-  document.getElementById('btn-alert-all')?.addEventListener('click', () => {
+  document.getElementById('btn-alert-all').addEventListener('click', () => {
     const endangered = State.staffResults.filter(r => r.status !== 'safe');
     if (!endangered.length) return;
     endangered.forEach(staff => {
@@ -1657,7 +1553,7 @@ function initStaffFilters() {
 // ════════════════════════════════════════════════════════════
 
 function buildAlertMessage(name, distM) {
-  const incident = document.getElementById('incident-title')?.value.trim() || 'Security Incident';
+  const incident = document.getElementById('incident-title').value.trim() || 'Security Incident';
   return `⚠ SAFETY ALERT: An incident (${incident}) has occurred ${Math.round(distM)}m from your location. Please follow evacuation procedures immediately. Stay safe. — WatchMe Security Dashboard`;
 }
 
@@ -1677,14 +1573,14 @@ window.openAlertModal = function(staffId, channel, name, phone, distM) {
 
   const iconDiv = document.getElementById('alert-channel-icon');
   const ch      = CHANNEL_ICONS[channel] || CHANNEL_ICONS.sms;
-  if (iconDiv) iconDiv.innerHTML = `<span style="font-size:18px">${ch.icon}</span>`;
+  iconDiv.innerHTML = `<span style="font-size:18px">${ch.icon}</span>`;
   document.getElementById('alert-channel-label').textContent = ch.label;
 
   openModal('alert-modal');
 };
 
 function initAlertModal() {
-  document.getElementById('alert-send-btn')?.addEventListener('click', async () => {
+  document.getElementById('alert-send-btn').addEventListener('click', async () => {
     const channel   = document.getElementById('alert-channel-value').value;
     const recipient = document.getElementById('alert-recipient-phone').textContent;
     const message   = document.getElementById('alert-message').value;
@@ -1695,17 +1591,13 @@ function initAlertModal() {
       return;
     }
 
-    if (btn) {
-      btn.disabled    = true;
-      btn.textContent = 'Sending…';
-    }
+    btn.disabled    = true;
+    btn.textContent = 'Sending…';
 
     await sendMockAlert(channel, recipient, message, '');
 
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg> Send Alert (Mock)`;
-    }
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg> Send Alert (Mock)`;
 
     closeModal('alert-modal');
   });
@@ -1722,6 +1614,7 @@ async function sendMockAlert(channel, recipient, message, incidentId) {
     toast(`Mock ${channel.toUpperCase()} sent to ${recipient}`, 'success');
     console.info('Alert response:', data);
   } catch {
+    // Offline mode
     toast(`Mock ${channel.toUpperCase()} queued (offline mode) for ${recipient}`, 'info');
   }
 }
@@ -1731,19 +1624,21 @@ async function sendMockAlert(channel, recipient, message, incidentId) {
 // ════════════════════════════════════════════════════════════
 
 function initExport() {
-  document.getElementById('btn-export-kml')?.addEventListener('click', () => exportMap('kml'));
-  document.getElementById('btn-export-kmz')?.addEventListener('click', () => exportMap('kmz'));
+  document.getElementById('btn-export-kml').addEventListener('click', () => exportMap('kml'));
+  document.getElementById('btn-export-kmz').addEventListener('click', () => exportMap('kmz'));
 }
 
 async function exportMap(format) {
   const allFeatures = [];
 
+  // Collect layer features
   Object.values(State.layers).forEach(layer => {
     if (layer.visible) {
       (layer.geojson?.features || []).forEach(f => allFeatures.push(f));
     }
   });
 
+  // Collect drawn shapes
   State.drawnItems.eachLayer(layer => {
     try { allFeatures.push(layer.toGeoJSON()); } catch {}
   });
@@ -1777,6 +1672,7 @@ async function exportMap(format) {
     URL.revokeObjectURL(url);
     toast(`Exported ${allFeatures.length} features as .${format.toUpperCase()}`, 'success');
   } catch {
+    // Client-side KML fallback
     exportKMLClientSide(fc, format);
   }
 }
@@ -1815,7 +1711,7 @@ function buildKMLString(fc) {
     const skip = new Set(['name','Name','description','Description','_style']);
     const extData = Object.entries(props)
       .filter(([k,v]) => !skip.has(k) && v !== '')
-      .map(([k,v]) => `<Data name="${k.replace(/"/g,'')}"><value>${String(v).replace(/</g,'&lt;')}</value></Data>`)
+      .map(([k,v]) => `<Data name="${k.replace(/"/g,'')}""><value>${String(v).replace(/</g,'&lt;')}</value></Data>`)
       .join('');
 
     return `<Placemark>
@@ -1840,17 +1736,17 @@ function buildKMLString(fc) {
 // ════════════════════════════════════════════════════════════
 
 function updateStatusBar() {
-  const layerEl = document.getElementById('status-layer-count');
-  const incEl = document.getElementById('status-incident-count');
-  if (layerEl) layerEl.textContent = `${Object.keys(State.layers).length} layers`;
-  if (incEl) incEl.textContent = `${State.incidents.length} incidents`;
+  document.getElementById('status-layer-count').textContent =
+    `${Object.keys(State.layers).length} layers`;
+  document.getElementById('status-incident-count').textContent =
+    `${State.incidents.length} incidents`;
 }
 
 function startClock() {
   function tick() {
     const now = new Date();
-    const clockEl = document.getElementById('status-time');
-    if (clockEl) clockEl.textContent = now.toUTCString().slice(17, 22) + ' UTC';
+    document.getElementById('status-time').textContent =
+      now.toUTCString().slice(17, 22) + ' UTC';
   }
   tick();
   setInterval(tick, 30000);
@@ -1861,9 +1757,11 @@ function startClock() {
 // ════════════════════════════════════════════════════════════
 
 function initModals() {
+  // Close buttons with data-modal attribute
   document.querySelectorAll('.modal-close').forEach(btn => {
     btn.addEventListener('click', () => closeModal(btn.dataset.modal));
   });
+  // Click backdrop to close
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay || e.target.classList.contains('modal-backdrop')) {
@@ -1871,6 +1769,7 @@ function initModals() {
       }
     });
   });
+  // ESC key
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       document.querySelectorAll('.modal-overlay.show').forEach(m => closeModal(m.id));
@@ -1879,216 +1778,6 @@ function initModals() {
   });
 }
 
-// ── Collapsible Right-side Proximity panel bindings ──────
-function initProximityPanel() {
-  const toggleBtn = document.getElementById('proximity-toggle-btn');
-  const panel     = document.getElementById('proximity-panel');
-  const closeBtn  = document.getElementById('proximity-panel-close');
-
-  if (toggleBtn && panel && closeBtn) {
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isClosed = panel.classList.contains('hidden');
-      if (isClosed) {
-        openProximityPanel();
-      } else {
-        closeProximityPanel();
-      }
-    });
-
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeProximityPanel();
-    });
-  }
-  
-  State.map.on('click', () => {
-    if (!State.placingIncident) {
-      closeProximityPanel();
-    }
-  });
-}
-
-function openProximityPanel() {
-  const panel = document.getElementById('proximity-panel');
-  if (!panel) return;
-  panel.classList.remove('hidden');
-  setTimeout(() => {
-    panel.classList.remove('translate-x-[380px]', 'opacity-0');
-    panel.classList.add('translate-x-0', 'opacity-100');
-  }, 50);
-}
-
-function closeProximityPanel() {
-  const panel = document.getElementById('proximity-panel');
-  if (!panel) return;
-  panel.classList.remove('translate-x-0', 'opacity-100');
-  panel.classList.add('translate-x-[380px]', 'opacity-0');
-  setTimeout(() => {
-    panel.classList.add('hidden');
-  }, 300);
-}
-
-// ── Custom Right-Click Context Menu setup on the Leaflet Map ──
-// دالة لتحويل الإحداثيات العشرية إلى نظام الدرجات والدقائق والثواني (DMS) لتطابق صورتك
-function toDMS(lat, lng) {
-  const convert = (val, pos, neg) => {
-    const absVal = Math.abs(val);
-    const degrees = Math.floor(absVal);
-    const minutes = Math.floor((absVal - degrees) * 60);
-    const seconds = (((absVal - degrees) * 60 - minutes) * 60).toFixed(1);
-    const direction = val >= 0 ? pos : neg;
-    return `${degrees}°${minutes}'${seconds}"${direction}`;
-  };
-  return `${convert(lat, 'N', 'S')}, ${convert(lng, 'E', 'W')}`;
-}
-
-// تعديل القائمة المنبثقة لتطابق التصميم الموجود بالصورة المرفقة تماماً
-function initMapContextMenu() {
-  State.map.on('contextmenu', (e) => {
-    if (e.originalEvent) {
-      e.originalEvent.preventDefault();
-    }
-
-    // إزالة أي قائمة قديمة مفتوحة
-    const oldMenu = document.getElementById('map-context-menu');
-    if (oldMenu) oldMenu.remove();
-
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
-    const dmsCoords = toDMS(lat, lng);
-    const decCoords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-
-    // إنشاء حاوية القائمة المنبثقة بتصميم Glassmorphic احترافي ومريح للعين
-    const menu = document.createElement('div');
-    menu.id = 'map-context-menu';
-    menu.className = 'absolute z-[9999] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-64 text-sm overflow-hidden animate-fade-up';
-    
-    menu.style.left = e.originalEvent.pageX + 'px';
-    menu.style.top  = e.originalEvent.pageY + 'px';
-
-    // هيكل القائمة المطابق للصورة تماماً (مع الهيدر الدائري للإحداثيات والأيقونة الزرقاء)
-    menu.innerHTML = `
-      <!-- الهيدر العلوي للإحداثيات -->
-      <div class="p-4 bg-slate-50 dark:bg-slate-950/40 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-start gap-2.5">
-          <!-- أيقونة الموقع الزرقاء -->
-          <svg class="w-4 h-4 text-blue-500 mt-0.5 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
-          </svg>
-          <div>
-            <span class="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500 block tracking-wider uppercase">Coordinates</span>
-            <span class="text-xs font-bold text-slate-800 dark:text-slate-200 block mt-1 leading-tight">${dmsCoords}</span>
-            <span class="text-[10px] font-mono text-slate-400 dark:text-slate-500 block mt-0.5">${decCoords}</span>
-          </div>
-        </div>
-      </div>
-      
-      <!-- خيارات القائمة -->
-      <div class="py-1 divide-y divide-slate-100 dark:divide-slate-800/50">
-        <!-- 1. نسخ الإحداثيات -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-copy-coords">
-          <span class="text-slate-400 dark:text-slate-500 text-sm">📋</span>
-          Copy Coordinates
-        </div>
-
-        <!-- 2. توسيط الخريطة هنا -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-center-map">
-          <span class="text-slate-400 dark:text-slate-500 text-sm">🎯</span>
-          Center Map Here
-        </div>
-
-        <!-- 3. إضافة علامة هنا -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-add-marker">
-          <span class="text-slate-400 dark:text-slate-500 text-sm">➕</span>
-          Add Marker Here
-        </div>
-
-        <!-- 4. توجيه من هنا (الذي يقوم بوضع الحادث وتشغيل الفحص فوراً) -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center justify-between transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-route-from">
-          <div class="flex items-center gap-3">
-            <span class="text-slate-400 dark:text-slate-500 text-sm">🔀</span>
-            Route From Here
-          </div>
-          <!-- زر التشغيل الأزرق الصغير المطابق تماماً للصورة -->
-          <span class="w-4 h-4 rounded bg-blue-500 text-white flex items-center justify-center text-[8px] font-bold">▶</span>
-        </div>
-
-        <!-- 5. توجيه إلى هنا -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center justify-between transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-route-to">
-          <div class="flex items-center gap-3">
-            <span class="text-slate-400 dark:text-slate-500 text-sm">➔</span>
-            Route To Here
-          </div>
-          <span class="w-4 h-4 rounded bg-blue-500 text-white flex items-center justify-center text-[8px] font-bold">▶</span>
-        </div>
-
-        <!-- 6. إعدادات الخريطة -->
-        <div class="px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer flex items-center gap-3 transition-colors text-slate-700 dark:text-slate-300 font-semibold" id="menu-map-settings">
-          <span class="text-slate-400 dark:text-slate-500 text-sm">⚙</span>
-          Map Settings
-        </div>
-      </div>
-    `;
-
-    // ربط أكواد التشغيل والعمليات بالخيارات
-    document.body.appendChild(menu);
-
-    // 1. نسخ الإحداثيات
-    document.getElementById('menu-copy-coords').onclick = () => {
-      const coordsText = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-      navigator.clipboard.writeText(coordsText).then(() => {
-        toast('Coordinates copied to clipboard!', 'success');
-      });
-    };
-
-    // 2. توسيط الخريطة
-    document.getElementById('menu-center-map').onclick = () => {
-      State.map.panTo([lat, lng]);
-    };
-
-    // 3. إضافة علامة
-    document.getElementById('menu-add-marker').onclick = () => {
-      const label = prompt("Enter custom marker label:", "Assessment Point");
-      if (label) {
-        L.marker([lat, lng], { icon: createCustomMarkerIcon('#3b82f6') })
-          .addTo(State.drawnItems)
-          .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">${esc(label)}</span></div></div>`)
-          .openPopup();
-      }
-    };
-
-    // 4. وضع الحادث وتشغيل الفحص الأمني فوراً (توجيه من هنا)
-    document.getElementById('menu-route-from').onclick = () => {
-      document.getElementById('incident-lat').value = lat.toFixed(6);
-      document.getElementById('incident-lng').value = lng.toFixed(6);
-      saveSetting('incident_lat', lat);
-      saveSetting('incident_lng', lng);
-      
-      updateIncidentCircle();
-      openProximityPanel();
-      runProximityScan();
-    };
-
-    // 5. توجيه إلى هنا
-    document.getElementById('menu-route-to').onclick = () => {
-      State.map.setView([lat, lng], 14, { animate: true });
-    };
-
-    // 6. إعدادات الخريطة (فتح لوحة التحكم)
-    document.getElementById('menu-map-settings').onclick = () => {
-      window.location.href = '/dashboard.html';
-    };
-
-    // غلق القائمة عند الضغط في أي مكان آخر
-    const closeMenu = () => {
-      menu.remove();
-      document.removeEventListener('click', closeMenu);
-    };
-    setTimeout(() => document.addEventListener('click', closeMenu), 50);
-  });
-}
 // ════════════════════════════════════════════════════════════
 // BOOTSTRAP — DOMContentLoaded
 // ════════════════════════════════════════════════════════════
@@ -2110,28 +1799,870 @@ document.addEventListener('DOMContentLoaded', () => {
   initAlertModal();
   initExport();
   initModals();
-  initProximityPanel();
   startClock();
   updateStatusBar();
 
-  loadSavedSettings();
-  loadSavedLayers();
-
-  document.getElementById('dark-mode-toggle')?.addEventListener('click', () => {
+  // Theme toggle button
+  document.getElementById('dark-mode-toggle').addEventListener('click', () => {
     applyTheme(!State.darkMode);
   });
 
+  // Severity radio visual update
   document.querySelectorAll('input[name="severity"]').forEach(radio => {
     radio.addEventListener('change', () => {
-      saveSetting('severity', radio.value);
+      // Default "medium" selected on load
     });
   });
-
+  // Pre-select "medium" severity
   const medRadio = document.querySelector('input[name="severity"][value="medium"]');
-  if (medRadio && !localStorage.getItem('wm_severity')) medRadio.checked = true;
+  if (medRadio) medRadio.checked = true;
 
+  // Health-check the backend (informational only)
   fetch(`${API}/api/health`)
     .then(r => r.json())
-    .then(d => console.info('Backend Cloud:', d.status, '| Layers in Supabase:', d.layers))
+    .then(d => console.info('Backend:', d.status, '| Layers in store:', d.layers))
     .catch(() => console.info('Backend offline — running in client-only mode'));
 });
+/* ================================================================
+   ADDITIONS — Proximity Panel, Right-click Menu, Supabase persist,
+   Pulsing circles
+================================================================ */
+
+// ════════════════════════════════════════════════════════════
+// SUPABASE — Free Postgres for settings persistence
+// Docs: https://supabase.com/docs/reference/javascript
+// ════════════════════════════════════════════════════════════
+
+// ⚠ الخطوة الوحيدة: ضع قيمتيك من Supabase هنا
+const SUPABASE_URL  = 'https://msbswxguybhdjztckqtu.supabase.co';
+const SUPABASE_ANON = 'sb_publishable_oy7ktZU0lhJ0zvtfXrTyoA_b0PBc...';
+//                     ↑ من الصورة السابقة — Publishable key
+
+// Session ID — يميّز هذا الجهاز (محفوظ في localStorage)
+let SESSION_ID = localStorage.getItem('wm_session') || (() => {
+  const id = 'sess_' + Math.random().toString(36).slice(2, 14);
+  localStorage.setItem('wm_session', id);
+  return id;
+})();
+
+let sb = null; // Supabase client instance
+
+function initFirebase() { // الاسم محفوظ لعدم كسر الكود — يشغّل Supabase
+  try {
+    if (typeof supabase === 'undefined' || SUPABASE_URL.startsWith('YOUR')) {
+      console.warn('[Supabase] Config not set — using localStorage fallback');
+      loadFromLocalStorage();
+      return;
+    }
+    sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+    console.info('[Supabase] Connected ✅');
+    loadPersistedSettings();
+  } catch (e) {
+    console.warn('[Supabase] Init failed:', e.message, '— localStorage fallback');
+    loadFromLocalStorage();
+  }
+}
+
+// ── Save a setting to Supabase ────────────────────────────────
+// Table: watchme_settings  (session_id text PK, data jsonb, updated_at timestamptz)
+async function saveSetting(key, value) {
+  // Immediate localStorage save so UI never waits for network
+  localStorage.setItem('wm_' + key, JSON.stringify(value));
+  if (!sb) return;
+  try {
+    // Read current row first so we can merge, not overwrite
+    const { data: existing } = await sb
+      .from('watchme_settings')
+      .select('data')
+      .eq('session_id', SESSION_ID)
+      .maybeSingle();
+
+    const merged = { ...(existing?.data || {}), [key]: value };
+
+    await sb.from('watchme_settings').upsert(
+      { session_id: SESSION_ID, data: merged, updated_at: new Date().toISOString() },
+      { onConflict: 'session_id' }
+    );
+  } catch (e) {
+    console.warn('[Supabase] Save failed:', e.message);
+  }
+}
+
+// ── Load all persisted settings ───────────────────────────────
+async function loadPersistedSettings() {
+  if (!sb) { loadFromLocalStorage(); return; }
+  try {
+    const { data, error } = await sb
+      .from('watchme_settings')
+      .select('data')
+      .eq('session_id', SESSION_ID)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (data?.data && Object.keys(data.data).length) {
+      applyPersistedSettings(data.data);
+      console.info('[Supabase] Settings loaded:', Object.keys(data.data).length, 'keys');
+    } else {
+      loadFromLocalStorage();
+    }
+  } catch (e) {
+    console.warn('[Supabase] Load failed:', e.message);
+    loadFromLocalStorage();
+  }
+}
+
+function loadFromLocalStorage() {
+  const keys = ['theme', 'lastIncidentLat', 'lastIncidentLng', 'lastRadius',
+                'lastIncidentType', 'tileLayer', 'proxHistory'];
+  const data = {};
+  keys.forEach(k => {
+    const v = localStorage.getItem('wm_' + k);
+    if (v) { try { data[k] = JSON.parse(v); } catch { data[k] = v; } }
+  });
+  if (Object.keys(data).length) applyPersistedSettings(data);
+}
+
+function applyPersistedSettings(data) {
+  // Theme
+  if (data.theme !== undefined) {
+    applyTheme(data.theme === 'dark');
+  }
+  // Tile layer
+  if (data.tileLayer) {
+    setTileLayer(data.tileLayer);
+    document.querySelectorAll('.tile-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.tile === data.tileLayer);
+    });
+  }
+  // Incident form values
+  if (data.lastIncidentLat) {
+    const latEl = document.getElementById('incident-lat') || document.getElementById('prox-lat');
+    if (latEl) latEl.value = data.lastIncidentLat;
+  }
+  if (data.lastIncidentLng) {
+    const lngEl = document.getElementById('incident-lng') || document.getElementById('prox-lng');
+    if (lngEl) lngEl.value = data.lastIncidentLng;
+  }
+  if (data.lastRadius) {
+    const rSlider = document.getElementById('incident-radius') || document.getElementById('prox-radius');
+    if (rSlider) {
+      rSlider.value = data.lastRadius;
+      const disp = document.getElementById('radius-value-display') || document.getElementById('prox-radius-val');
+      if (disp) disp.textContent = fmtDist(parseInt(data.lastRadius));
+    }
+  }
+  if (data.lastIncidentType) {
+    const sel = document.getElementById('prox-incident-type');
+    if (sel) sel.value = data.lastIncidentType;
+  }
+  // Prox history
+  if (data.proxHistory && Array.isArray(data.proxHistory)) {
+    ProxState.history = data.proxHistory;
+    renderProxHistory();
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// PROXIMITY PANEL STATE
+// ════════════════════════════════════════════════════════════
+
+const ProxState = {
+  open:       false,
+  activeTab:  'input',
+  results:    [],
+  history:    [],
+  circles:    [],   // Leaflet circle layers for pulsing circles
+  rings:      [],   // extra ring layers
+};
+
+// ── Toggle panel open/close ───────────────────────────────────
+function toggleProximityPanel() {
+  ProxState.open = !ProxState.open;
+  const panel = document.getElementById('proximity-panel');
+  const btn   = document.getElementById('proximity-toggle-btn');
+
+  if (ProxState.open) {
+    panel.classList.remove('panel-hidden');
+    btn.classList.add('panel-open');
+    btn.title = 'Hide Proximity Analysis';
+    // Auto-hide sidebar on smaller screens
+    if (window.innerWidth < 1200) {
+      document.getElementById('sidebar').classList.add('collapsed');
+      document.getElementById('sidebar-expand-btn').classList.remove('hidden');
+    }
+  } else {
+    panel.classList.add('panel-hidden');
+    btn.classList.remove('panel-open');
+    btn.title = 'Proximity Analysis';
+  }
+}
+
+function switchProxTab(tabName) {
+  ProxState.activeTab = tabName;
+  document.querySelectorAll('.prox-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.prox-pane').forEach(p => {
+    p.classList.toggle('active', p.dataset.pane === tabName);
+  });
+}
+
+// ── Build the HTML for the proximity panel ───────────────────
+function buildProximityPanel() {
+  const panel = document.createElement('div');
+  panel.id = 'proximity-panel';
+  panel.className = 'panel-hidden';
+  panel.innerHTML = `
+    <!-- Header -->
+    <div class="prox-header">
+      <div class="prox-title-row">
+        <div class="prox-icon">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#ef4444" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/>
+          </svg>
+        </div>
+        <div>
+          <div class="prox-title">Proximity Analysis</div>
+          <div class="prox-sub">Locate and assess incidents</div>
+        </div>
+      </div>
+      <button onclick="toggleProximityPanel()" style="background:transparent;border:none;cursor:pointer;color:#64748b;padding:4px;" title="Close">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="prox-tabs">
+      <button class="prox-tab active" data-tab="input"   onclick="switchProxTab('input')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:3px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>Input
+      </button>
+      <button class="prox-tab" data-tab="results" onclick="switchProxTab('results')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:3px"><path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>Results
+      </button>
+      <button class="prox-tab" data-tab="alerts" onclick="switchProxTab('alerts')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:3px"><path stroke-linecap="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>Alerts
+      </button>
+      <button class="prox-tab" data-tab="history" onclick="switchProxTab('history')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:3px"><path stroke-linecap="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>History
+      </button>
+    </div>
+
+    <!-- INPUT PANE -->
+    <div class="prox-pane active" data-pane="input">
+      <div class="prox-field">
+        <label class="prox-label">Incident Type</label>
+        <select id="prox-incident-type" class="prox-input" onchange="saveSetting('lastIncidentType',this.value)" style="width:100%">
+          <option value="Airstrike">Airstrike</option>
+          <option value="Evacuation Order">Evacuation Order</option>
+          <option value="Ground Operation">Ground Operation</option>
+          <option value="Security Alert">Security Alert</option>
+          <option value="Checkpoint">Checkpoint</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="prox-field">
+        <label class="prox-label">Incident Name</label>
+        <input class="prox-input" id="prox-title" placeholder="e.g., Airstrike on Gaza City" />
+      </div>
+      <div class="prox-field">
+        <label class="prox-label">Description (Optional)</label>
+        <textarea class="prox-input" id="prox-desc" rows="2" placeholder="Additional details..." style="resize:none"></textarea>
+      </div>
+      <div class="prox-coord-row">
+        <div class="prox-field">
+          <label class="prox-label">Latitude</label>
+          <input class="prox-input" id="prox-lat" placeholder="31.5" type="number" step="any"
+                 onchange="saveSetting('lastIncidentLat',this.value); updateProxCircle()" />
+        </div>
+        <div class="prox-field">
+          <label class="prox-label">Longitude</label>
+          <input class="prox-input" id="prox-lng" placeholder="34.47" type="number" step="any"
+                 onchange="saveSetting('lastIncidentLng',this.value); updateProxCircle()" />
+        </div>
+      </div>
+      <div>
+        <div class="prox-radius-row">
+          <label class="prox-label" style="margin:0">Proximity Radius</label>
+          <span class="prox-radius-val" id="prox-radius-val">500m</span>
+        </div>
+        <input type="range" class="prox-slider" id="prox-radius"
+               min="100" max="10000" step="100" value="500"
+               oninput="onProxRadiusChange(this.value)" />
+        <div style="display:flex;justify-content:space-between;margin-top:-6px;margin-bottom:8px">
+          <span style="font-size:9px;font-family:var(--font-mono);color:#475569">100m</span>
+          <span style="font-size:9px;font-family:var(--font-mono);color:#475569">10km</span>
+        </div>
+      </div>
+      <button class="prox-locate-btn" onclick="runProximityAnalysis()">
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+        </svg>
+        Locate &amp; Assess
+      </button>
+      <button style="width:100%;margin-top:6px;padding:6px;border-radius:8px;background:transparent;border:1px dashed rgba(255,255,255,0.12);color:#64748b;font-size:11px;font-family:var(--font-mono);cursor:pointer;"
+              onclick="enterProxPlacementMode()">
+        📍 Click map to place incident
+      </button>
+    </div>
+
+    <!-- RESULTS PANE -->
+    <div class="prox-pane" data-pane="results">
+      <div id="prox-summary" class="prox-summary"></div>
+      <div class="prox-results-scroll" id="prox-results-list">
+        <div class="prox-empty">Run "Locate &amp; Assess" to see results</div>
+      </div>
+    </div>
+
+    <!-- ALERTS PANE -->
+    <div class="prox-pane" data-pane="alerts">
+      <div class="prox-results-scroll" id="prox-alerts-list">
+        <div class="prox-empty">No at-risk staff found yet</div>
+      </div>
+    </div>
+
+    <!-- HISTORY PANE -->
+    <div class="prox-pane" data-pane="history">
+      <div class="prox-results-scroll" id="prox-history-list">
+        <div class="prox-empty">No incident history yet</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('map-wrapper').appendChild(panel);
+}
+
+// ── Toggle button ─────────────────────────────────────────────
+function buildProximityToggleBtn() {
+  const btn = document.createElement('button');
+  btn.id        = 'proximity-toggle-btn';
+  btn.title     = 'Proximity Analysis';
+  btn.innerHTML = `
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/>
+    </svg>`;
+  btn.onclick = toggleProximityPanel;
+  document.getElementById('map-wrapper').appendChild(btn);
+}
+
+window.toggleProximityPanel = toggleProximityPanel;
+window.switchProxTab        = switchProxTab;
+window.saveSetting          = saveSetting;
+window.updateProxCircle     = updateProxCircle;
+window.onProxRadiusChange   = onProxRadiusChange;
+window.runProximityAnalysis = runProximityAnalysis;
+window.enterProxPlacementMode = enterProxPlacementMode;
+
+// ── Radius change ─────────────────────────────────────────────
+function onProxRadiusChange(val) {
+  document.getElementById('prox-radius-val').textContent = fmtDist(parseInt(val));
+  saveSetting('lastRadius', val);
+  updateProxCircle();
+}
+
+// ── Dynamic circle preview ────────────────────────────────────
+let proxPreviewCircle = null;
+function updateProxCircle() {
+  const lat = parseFloat(document.getElementById('prox-lat')?.value);
+  const lng = parseFloat(document.getElementById('prox-lng')?.value);
+  const r   = parseInt(document.getElementById('prox-radius')?.value || 500);
+  if (isNaN(lat) || isNaN(lng) || !State.map) return;
+
+  if (proxPreviewCircle) State.map.removeLayer(proxPreviewCircle);
+  proxPreviewCircle = L.circle([lat, lng], {
+    radius:      r,
+    color:       '#ef4444',
+    fillColor:   '#ef4444',
+    fillOpacity: 0.05,
+    weight:      1.5,
+    dashArray:   '8 5',
+    className:   'incident-radius-circle',
+  }).addTo(State.map);
+}
+
+// ── Click-on-map placement mode (for proximity panel) ─────────
+function enterProxPlacementMode() {
+  State.placingIncident = true;
+  State.placingForProx  = true;
+  document.body.classList.add('placing-incident');
+  document.getElementById('incident-place-mode-indicator')?.classList.remove('hidden');
+  toast('Click map to set incident location', 'info', 2000);
+}
+
+// Patch the existing onMapClick to also fill prox panel fields
+const _origOnMapClick = window.onMapClick;
+State.map && State.map.off('click');
+State.map && State.map.on('click', function(e) {
+  if (State.placingIncident) {
+    const { lat, lng } = e.latlng;
+    // Fill original form
+    const latEl = document.getElementById('incident-lat');
+    const lngEl = document.getElementById('incident-lng');
+    if (latEl) latEl.value = lat.toFixed(6);
+    if (lngEl) lngEl.value = lng.toFixed(6);
+    // Fill prox panel form
+    const pLat = document.getElementById('prox-lat');
+    const pLng = document.getElementById('prox-lng');
+    if (pLat) pLat.value = lat.toFixed(6);
+    if (pLng) pLng.value = lng.toFixed(6);
+
+    saveSetting('lastIncidentLat', lat.toFixed(6));
+    saveSetting('lastIncidentLng', lng.toFixed(6));
+
+    State.placingIncident = false;
+    State.placingForProx  = false;
+    document.body.classList.remove('placing-incident');
+    document.getElementById('incident-place-mode-indicator')?.classList.add('hidden');
+    updateProxCircle();
+    toast(`Incident placed at ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'success', 2000);
+  }
+});
+
+// ── Run the proximity analysis ────────────────────────────────
+function runProximityAnalysis() {
+  const lat    = parseFloat(document.getElementById('prox-lat')?.value);
+  const lng    = parseFloat(document.getElementById('prox-lng')?.value);
+  const radius = parseInt(document.getElementById('prox-radius')?.value || 500);
+  const title  = document.getElementById('prox-title')?.value?.trim() || 'Incident';
+  const type   = document.getElementById('prox-incident-type')?.value || 'Other';
+
+  if (isNaN(lat) || isNaN(lng)) {
+    toast('Enter coordinates or click the map first', 'warning'); return;
+  }
+  if (!Object.keys(State.layers).length) {
+    toast('Load at least one staff layer first', 'warning'); return;
+  }
+
+  // Collect all Point features
+  const staffList = [];
+  for (const [, layer] of Object.entries(State.layers)) {
+    (layer.geojson?.features || []).forEach(f => {
+      if (f.geometry?.type !== 'Point') return;
+      const [fLng, fLat] = f.geometry.coordinates;
+      const p = f.properties || {};
+      staffList.push({
+        id:         uid(),
+        name:       p.name || p.Name || 'Unnamed',
+        department: p.Department || p.department || p.dept || '',
+        phone:      p.Phone || p.phone || p.tel || '',
+        telegram:   p.Telegram || p.telegram || p.tg || '',
+        lat: fLat, lng: fLng,
+        layerName: layer.meta.name,
+        layerColor: layer.style?.color || '#f97316',
+      });
+    });
+  }
+
+  if (!staffList.length) {
+    toast('No Point features in loaded layers', 'warning'); return;
+  }
+
+  // Compute distances
+  const results = staffList.map(s => {
+    const d = haversine(lat, lng, s.lat, s.lng);
+    let status;
+    if (d <= radius * 0.15)      status = 'inside';
+    else if (d <= radius * 0.35) status = 'critical';
+    else if (d <= radius * 0.65) status = 'high';
+    else if (d <= radius)        status = 'medium';
+    else                         status = 'safe';
+    return { ...s, distance_m: d, status };
+  }).sort((a, b) => a.distance_m - b.distance_m);
+
+  ProxState.results = results;
+
+  // Save to history
+  const histEntry = {
+    id:        uid(),
+    title,
+    type,
+    lat,
+    lng,
+    radius,
+    timestamp: new Date().toISOString(),
+    affected:  results.filter(r => r.status !== 'safe').length,
+    total:     results.length,
+  };
+  ProxState.history.unshift(histEntry);
+  if (ProxState.history.length > 20) ProxState.history.pop();
+  saveSetting('proxHistory', ProxState.history);
+
+  // Draw pulsing circles on map
+  drawPulsingCircles(lat, lng, radius, results);
+
+  // Render UI
+  renderProxResults(results);
+  renderProxAlerts(results);
+  renderProxHistory();
+
+  // Switch to results tab
+  switchProxTab('results');
+
+  // Fit map
+  const pts = results.filter(r => r.status !== 'safe').map(r => [r.lat, r.lng]);
+  pts.push([lat, lng]);
+  if (pts.length > 1) {
+    State.map.fitBounds(L.latLngBounds(pts).pad(0.25), { animate: true });
+  }
+
+  const affected = results.filter(r => r.status !== 'safe').length;
+  toast(affected ? `⚠ ${affected} staff in danger zone` : '✓ All staff outside danger zone',
+        affected ? 'error' : 'success');
+}
+
+// ── Pulsing coloured circles on the map ──────────────────────
+function drawPulsingCircles(incLat, incLng, radius, results) {
+  // Clear previous
+  ProxState.circles.forEach(c => State.map.removeLayer(c));
+  ProxState.circles = [];
+
+  const colorMap = {
+    inside:   { fill: '#ef4444', stroke: '#ef4444', opacity: 0.25 },
+    critical: { fill: '#ef4444', stroke: '#ef4444', opacity: 0.18 },
+    high:     { fill: '#f59e0b', stroke: '#f59e0b', opacity: 0.15 },
+    medium:   { fill: '#eab308', stroke: '#eab308', opacity: 0.12 },
+    safe:     { fill: '#22c55e', stroke: '#22c55e', opacity: 0.08 },
+  };
+
+  // Draw incident radius circle
+  const radiusCircle = L.circle([incLat, incLng], {
+    radius,
+    color:       '#ef4444',
+    fillColor:   '#ef4444',
+    fillOpacity: 0.06,
+    weight:      1.5,
+    dashArray:   '8 5',
+  }).addTo(State.map);
+  ProxState.circles.push(radiusCircle);
+
+  // Draw incident marker
+  const incMarker = L.marker([incLat, incLng], { icon: createIncidentIcon(), zIndexOffset: 1000 })
+    .addTo(State.map);
+  ProxState.circles.push(incMarker);
+
+  // Draw each staff member as a pulsing circle
+  results.forEach((staff, idx) => {
+    if (staff.status === 'safe') return;
+    const c = colorMap[staff.status];
+    const r = Math.max(30, 80 - idx * 3); // slightly smaller for farther ones
+
+    // Outer pulsing ring
+    const ring = L.circleMarker([staff.lat, staff.lng], {
+      radius:      r,
+      color:       c.stroke,
+      fillColor:   c.fill,
+      fillOpacity: c.opacity,
+      weight:      1.5,
+      className:   `prox-circle-${staff.status}`,
+    }).addTo(State.map);
+
+    // Inner solid dot
+    const dot = L.circleMarker([staff.lat, staff.lng], {
+      radius:      6,
+      color:       c.stroke,
+      fillColor:   c.fill,
+      fillOpacity: 0.9,
+      weight:      2,
+    }).addTo(State.map)
+      .bindTooltip(`<span style="font-size:11px;font-family:var(--font-mono)">${staff.name}<br>${fmtDist(staff.distance_m)}</span>`,
+        { permanent: false, direction: 'top', className: 'wm-tooltip' });
+
+    ProxState.circles.push(ring, dot);
+  });
+}
+
+// ── Render results tab ────────────────────────────────────────
+function renderProxResults(results) {
+  const list = document.getElementById('prox-results-list');
+  const summ = document.getElementById('prox-summary');
+  if (!list) return;
+
+  const counts = { inside:0, critical:0, high:0, medium:0, safe:0 };
+  results.forEach(r => counts[r.status]++);
+
+  const chipDefs = [
+    { key:'inside',   color:'#ef4444', label:'Inside' },
+    { key:'critical', color:'#ef4444', label:'Critical' },
+    { key:'high',     color:'#f59e0b', label:'High' },
+    { key:'medium',   color:'#eab308', label:'Medium' },
+    { key:'safe',     color:'#22c55e', label:'Safe' },
+  ];
+  summ.innerHTML = chipDefs
+    .filter(d => counts[d.key] > 0)
+    .map(d => `<span class="prox-summary-chip" style="background:${d.color}20;color:${d.color};border:1px solid ${d.color}40">
+      <span style="width:6px;height:6px;border-radius:50%;background:${d.color};display:inline-block"></span>
+      ${counts[d.key]} ${d.label}
+    </span>`).join('');
+
+  const colorMap = { inside:'#ef4444', critical:'#ef4444', high:'#f59e0b', medium:'#eab308', safe:'#22c55e' };
+  const endangered = results.filter(r => r.status !== 'safe');
+
+  if (!endangered.length) {
+    list.innerHTML = '<div class="prox-empty">✓ All staff outside danger zone</div>';
+    return;
+  }
+
+  list.innerHTML = endangered.map(r => `
+    <div class="prox-result-item" onclick="State.map.setView([${r.lat},${r.lng}],16,{animate:true})">
+      <span class="prox-result-dot" style="background:${colorMap[r.status]};color:${colorMap[r.status]}"></span>
+      <div style="flex:1;min-width:0">
+        <div class="prox-result-name">${esc(r.name)}</div>
+        ${r.department ? `<div class="prox-result-dept">${esc(r.department)}</div>` : ''}
+      </div>
+      <span class="prox-result-dist" style="color:${colorMap[r.status]}">${fmtDist(r.distance_m)}</span>
+    </div>`).join('');
+}
+
+// ── Render alerts tab ─────────────────────────────────────────
+function renderProxAlerts(results) {
+  const list = document.getElementById('prox-alerts-list');
+  if (!list) return;
+  const endangered = results.filter(r => r.status !== 'safe');
+  if (!endangered.length) {
+    list.innerHTML = '<div class="prox-empty">No at-risk staff</div>'; return;
+  }
+  const colorMap = { inside:'#ef4444', critical:'#ef4444', high:'#f59e0b', medium:'#eab308' };
+  list.innerHTML = endangered.map(r => `
+    <div class="prox-alert-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:#e2e8f0;font-weight:500">${esc(r.name)}</div>
+        <div style="font-size:10px;font-family:var(--font-mono);color:${colorMap[r.status]||'#94a3b8'}">${fmtDist(r.distance_m)}</div>
+      </div>
+      <div class="prox-alert-btns">
+        ${r.phone    ? `<button class="prox-alert-btn wa"  onclick="sendProxAlert('whatsapp','${r.phone}','${esc(r.name)}',${r.distance_m.toFixed(0)})">WA</button>` : ''}
+        ${r.telegram ? `<button class="prox-alert-btn tg"  onclick="sendProxAlert('telegram','${r.telegram}','${esc(r.name)}',${r.distance_m.toFixed(0)})">TG</button>` : ''}
+        ${r.phone    ? `<button class="prox-alert-btn sms" onclick="sendProxAlert('sms','${r.phone}','${esc(r.name)}',${r.distance_m.toFixed(0)})">SMS</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+window.sendProxAlert = function(channel, recipient, name, distM) {
+  const incident = document.getElementById('prox-title')?.value || 'Incident';
+  const msg = `⚠ SAFETY ALERT: ${incident} occurred ${Math.round(distM)}m from your location. Follow evacuation procedures immediately.`;
+  sendMockAlert(channel, recipient, msg, '');
+};
+
+// ── Render history tab ────────────────────────────────────────
+function renderProxHistory() {
+  const list = document.getElementById('prox-history-list');
+  if (!list || !ProxState.history.length) {
+    if (list) list.innerHTML = '<div class="prox-empty">No incident history yet</div>';
+    return;
+  }
+  list.innerHTML = ProxState.history.map(h => `
+    <div class="prox-history-item" onclick="replayHistoryItem('${h.id}')">
+      <div class="prox-history-title">${esc(h.title)} <span style="font-size:10px;color:#64748b">(${h.type})</span></div>
+      <div class="prox-history-meta">${new Date(h.timestamp).toLocaleString()} · ${h.affected} affected / ${h.total} total · r=${fmtDist(h.radius)}</div>
+    </div>`).join('');
+}
+
+window.replayHistoryItem = function(id) {
+  const h = ProxState.history.find(x => x.id === id);
+  if (!h) return;
+  const pLat = document.getElementById('prox-lat');
+  const pLng = document.getElementById('prox-lng');
+  const pRad = document.getElementById('prox-radius');
+  const pTyp = document.getElementById('prox-incident-type');
+  const pTit = document.getElementById('prox-title');
+  if (pLat) pLat.value = h.lat;
+  if (pLng) pLng.value = h.lng;
+  if (pRad) { pRad.value = h.radius; onProxRadiusChange(h.radius); }
+  if (pTyp) pTyp.value = h.type;
+  if (pTit) pTit.value = h.title;
+  switchProxTab('input');
+  toast('History loaded — press Locate & Assess to re-run', 'info');
+};
+
+// ════════════════════════════════════════════════════════════
+// RIGHT-CLICK CONTEXT MENU
+// ════════════════════════════════════════════════════════════
+
+let ctxMenuCoords = { lat: 0, lng: 0 };
+
+function buildContextMenu() {
+  const menu = document.createElement('div');
+  menu.id = 'map-context-menu';
+  menu.className = 'hidden';
+  document.body.appendChild(menu);
+}
+
+function showContextMenu(e, latlng) {
+  e.originalEvent.preventDefault();
+  const { lat, lng } = latlng;
+  ctxMenuCoords = { lat, lng };
+
+  const latDMS = toDMS(lat, 'lat');
+  const lngDMS = toDMS(lng, 'lng');
+
+  const menu = document.getElementById('map-context-menu');
+  menu.innerHTML = `
+    <div class="ctx-header">
+      <div class="ctx-coords-main">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="#f97316" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+        </svg>
+        Coordinates
+      </div>
+      <div class="ctx-coords-dec" style="margin-top:3px;font-size:11px;color:#94a3b8;font-family:var(--font-mono)">
+        ${latDMS},&nbsp;${lngDMS}<br>
+        <span style="color:#64748b">${lat.toFixed(6)}, ${lng.toFixed(6)}</span>
+      </div>
+    </div>
+    <button class="ctx-item" onclick="ctxCopyCoords()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      Copy Coordinates
+    </button>
+    <button class="ctx-item" onclick="ctxCenterMap()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+      Center Map Here
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item" onclick="ctxAddMarker()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+      Add Marker Here
+    </button>
+    <button class="ctx-item" onclick="ctxSetAsIncident()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>
+      Set as Incident Location
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item" onclick="ctxRouteFrom()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+      Route From Here
+      <svg class="ctx-arrow" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+    <button class="ctx-item" onclick="ctxRouteTo()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+      Route To Here
+      <svg class="ctx-arrow" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item" onclick="closeContextMenu()">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4m0 14v4M4.22 4.22l2.83 2.83m9.9 9.9 2.83 2.83M1 12h4m14 0h4M4.22 19.78l2.83-2.83m9.9-9.9 2.83-2.83"/></svg>
+      Map Settings
+    </button>`;
+
+  // Position menu at mouse
+  const x = e.originalEvent.clientX;
+  const y = e.originalEvent.clientY;
+  const vpW = window.innerWidth;
+  const vpH = window.innerHeight;
+  menu.classList.remove('hidden');
+  menu.style.left = (x + 210 > vpW ? x - 210 : x) + 'px';
+  menu.style.top  = (y + 300 > vpH ? y - 300 : y) + 'px';
+}
+
+function closeContextMenu() {
+  const m = document.getElementById('map-context-menu');
+  if (m) m.classList.add('hidden');
+}
+
+// DMS helper
+function toDMS(decimal, axis) {
+  const abs  = Math.abs(decimal);
+  const deg  = Math.floor(abs);
+  const minF = (abs - deg) * 60;
+  const min  = Math.floor(minF);
+  const sec  = ((minF - min) * 60).toFixed(1);
+  const dir  = axis === 'lat' ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
+  return `${deg}°${min}'${sec}"${dir}`;
+}
+
+// Context menu actions
+window.ctxCopyCoords = function() {
+  const { lat, lng } = ctxMenuCoords;
+  navigator.clipboard?.writeText(`${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+    .then(() => toast('Coordinates copied', 'success', 2000))
+    .catch(() => toast(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, 'info', 4000));
+  closeContextMenu();
+};
+window.ctxCenterMap = function() {
+  State.map.setView([ctxMenuCoords.lat, ctxMenuCoords.lng], State.map.getZoom(), { animate: true });
+  closeContextMenu();
+};
+window.ctxAddMarker = function() {
+  const { lat, lng } = ctxMenuCoords;
+  L.marker([lat, lng], { icon: createCustomMarkerIcon('#f97316') })
+    .addTo(State.drawnItems)
+    .bindPopup(`<div class="wm-popup"><div class="wm-popup-header"><span class="wm-popup-title">Marker</span></div>
+      <div class="wm-popup-props">
+        <div class="wm-popup-row"><span class="wm-popup-key">Lat</span><span class="wm-popup-val">${lat.toFixed(6)}</span></div>
+        <div class="wm-popup-row"><span class="wm-popup-key">Lng</span><span class="wm-popup-val">${lng.toFixed(6)}</span></div>
+      </div></div>`)
+    .openPopup();
+  closeContextMenu();
+  toast('Marker added', 'success', 1500);
+};
+window.ctxSetAsIncident = function() {
+  const { lat, lng } = ctxMenuCoords;
+  const pLat = document.getElementById('prox-lat');
+  const pLng = document.getElementById('prox-lng');
+  if (pLat) pLat.value = lat.toFixed(6);
+  if (pLng) pLng.value = lng.toFixed(6);
+  saveSetting('lastIncidentLat', lat.toFixed(6));
+  saveSetting('lastIncidentLng', lng.toFixed(6));
+  updateProxCircle();
+  if (!ProxState.open) toggleProximityPanel();
+  closeContextMenu();
+  toast('Incident location set', 'info', 2000);
+};
+window.ctxRouteFrom = function() {
+  const { lat, lng } = ctxMenuCoords;
+  window.open(`https://www.google.com/maps/dir/${lat},${lng}/`, '_blank');
+  closeContextMenu();
+};
+window.ctxRouteTo = function() {
+  const { lat, lng } = ctxMenuCoords;
+  window.open(`https://www.google.com/maps/dir//${lat},${lng}/`, '_blank');
+  closeContextMenu();
+};
+window.closeContextMenu = closeContextMenu;
+
+// ════════════════════════════════════════════════════════════
+// INIT — wire everything up after map is ready
+// ════════════════════════════════════════════════════════════
+
+function initProximityPanel() {
+  buildProximityPanel();
+  buildProximityToggleBtn();
+}
+
+function initContextMenu() {
+  buildContextMenu();
+  State.map.on('contextmenu', (e) => showContextMenu(e, e.latlng));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#map-context-menu')) closeContextMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeContextMenu();
+  });
+}
+
+// Patch the DOMContentLoaded bootstrap to call new inits
+const _origLoad = document.addEventListener.bind(document);
+document.addEventListener('DOMContentLoaded', () => {
+  // These run after the original DOMContentLoaded finishes
+  setTimeout(() => {
+    initProximityPanel();
+    initContextMenu();
+    initFirebase();
+  }, 200);
+});
+
+// Also patch the theme toggle to persist it
+const _origApplyTheme = window.applyTheme;
+window.applyTheme = function(dark) {
+  _origApplyTheme(dark);
+  saveSetting('theme', dark ? 'dark' : 'light');
+};
+
+// Patch tile switcher to persist
+const _origSetTileLayer = window.setTileLayer;
+window.setTileLayer = function(key) {
+  _origSetTileLayer && _origSetTileLayer(key);
+  saveSetting('tileLayer', key);
+};
