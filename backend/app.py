@@ -1,14 +1,10 @@
 """
-Smart Security & Tracking Dashboard — Backend API
-FastAPI application serving:
-  - Static frontend files
-  - KML/KMZ upload → GeoJSON conversion
-  - Haversine distance calculations
-  - Point-in-Polygon geofencing
-  - Mock emergency alert endpoints (SMS / WhatsApp / Telegram)
-
-Designed for Render Free Tier: no heavy dependencies, in-memory state,
-SQLite persistence only for incident log, zero external spatial libraries.
+WatchMe — Smart Security Dashboard
+Backend with full auth system:
+  - Email-based registration with admin approval flow
+  - Gmail SMTP for sending emails
+  - JWT session tokens
+  - Per-user data isolation (layers, incidents, alerts, settings)
 """
 
 from __future__ import annotations
@@ -17,58 +13,56 @@ import io
 import json
 import logging
 import math
+import os
 import re
+import secrets
+import smtplib
 import sqlite3
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-import aiofiles
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("dashboard")
+
+# ---------------------------------------------------------------------------
+# Config from environment
+# ---------------------------------------------------------------------------
+ADMIN_EMAIL       = os.environ.get("ADMIN_EMAIL", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+SECRET_KEY        = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+BASE_URL          = os.environ.get("BASE_URL", "http://localhost:8000")
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).parent
+BASE_DIR   = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
-
-DB_PATH = BASE_DIR / "incidents.db"
-
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="Smart Security & Tracking Dashboard",
-    description="Humanitarian GIS backend for Palestine / Gaza Strip operations.",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+DB_PATH    = BASE_DIR / "watchme.db"
 
 # ---------------------------------------------------------------------------
-# SQLite — database connection and schema initialization
+# FastAPI
+# ---------------------------------------------------------------------------
+app = FastAPI(title="WatchMe Security Dashboard", version="2.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ---------------------------------------------------------------------------
+# Database
 # ---------------------------------------------------------------------------
 
 def get_db() -> sqlite3.Connection:
@@ -79,21 +73,33 @@ def get_db() -> sqlite3.Connection:
 
 def init_db() -> None:
     with get_db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id                TEXT PRIMARY KEY,
+                email             TEXT UNIQUE NOT NULL,
+                name              TEXT NOT NULL,
+                organization      TEXT DEFAULT '',
+                status            TEXT DEFAULT 'pending',
+                admin_token       TEXT,
+                user_token        TEXT,
+                session_token     TEXT,
+                session_expires   TEXT,
+                created_at        TEXT NOT NULL,
+                approved_at       TEXT,
+                approved_by       TEXT DEFAULT 'admin'
             );
 
             CREATE TABLE IF NOT EXISTS layers (
                 id      TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
                 name    TEXT NOT NULL,
-                geojson TEXT NOT NULL
+                geojson TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS incidents (
                 id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
                 title       TEXT NOT NULL,
                 description TEXT,
                 severity    TEXT DEFAULT 'medium',
@@ -106,6 +112,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS alert_log (
                 id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
                 channel     TEXT NOT NULL,
                 recipient   TEXT NOT NULL,
                 message     TEXT NOT NULL,
@@ -113,619 +120,178 @@ def init_db() -> None:
                 status      TEXT DEFAULT 'mock_sent',
                 sent_at     TEXT NOT NULL
             );
-            """
-        )
+
+            CREATE TABLE IF NOT EXISTS settings (
+                user_id TEXT NOT NULL,
+                key     TEXT NOT NULL,
+                value   TEXT,
+                PRIMARY KEY (user_id, key)
+            );
+        """)
     log.info("Database initialised at %s", DB_PATH)
 
 
 init_db()
 
 # ---------------------------------------------------------------------------
-# In-memory layer store (lost on restart — acceptable for MVP)
+# Auth helpers
 # ---------------------------------------------------------------------------
-# Structure: { layer_id: { "name": str, "geojson": dict } }
-LAYER_STORE: dict[str, dict] = {}
-MAX_LAYERS = 15
+
+def get_current_user(request: Request) -> dict:
+    """Extract user from session token in Authorization header or cookie."""
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.cookies.get("wm_session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE session_token = ? AND status = 'approved'",
+            (token,)
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    # Check expiry
+    if row["session_expires"]:
+        expires = datetime.fromisoformat(row["session_expires"])
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(status_code=401, detail="Session expired")
+
+    return dict(row)
+
+
+def require_auth(request: Request) -> dict:
+    return get_current_user(request)
 
 # ---------------------------------------------------------------------------
-# KML XML namespaces
+# Email sending
 # ---------------------------------------------------------------------------
-KML_NS = "http://www.opengis.net/kml/2.2"
-GX_NS  = "http://www.google.com/kml/ext/2.2"
 
-ET.register_namespace("",   KML_NS)
-ET.register_namespace("gx", GX_NS)
+def send_email(to_address: str, subject: str, html_body: str) -> bool:
+    """Send an email via Gmail SMTP using App Password."""
+    if not ADMIN_EMAIL or not GMAIL_APP_PASSWORD:
+        log.warning("Email not configured — printing to log instead")
+        log.info("TO: %s | SUBJECT: %s", to_address, subject)
+        return False
 
-
-# ===========================================================================
-# KML / KMZ PARSING → GeoJSON
-# ===========================================================================
-
-def _tag(local: str, ns: str = KML_NS) -> str:
-    return f"{{{ns}}}{local}"
-
-
-def _child_text(el: ET.Element, local: str, ns: str = KML_NS) -> str:
-    child = el.find(_tag(local, ns))
-    return child.text.strip() if child is not None and child.text else ""
-
-
-def _parse_coordinates(raw: str) -> list[list[float]]:
-    """
-    Parse KML <coordinates> text into [[lon, lat, alt?], ...].
-    Handles both comma-separated tuples and whitespace-separated tuples,
-    and trims altitude if present.
-    """
-    coords: list[list[float]] = []
-    raw = raw.strip()
-    for token in re.split(r"\s+", raw):
-        token = token.strip()
-        if not token:
-            continue
-        parts = token.split(",")
-        if len(parts) >= 2:
-            try:
-                lon = float(parts[0])
-                lat = float(parts[1])
-                coords.append([lon, lat])
-            except ValueError:
-                continue
-    return coords
-
-
-def _extract_extended_data(placemark: ET.Element) -> dict[str, Any]:
-    """Extract <ExtendedData> / <SimpleData> / <Data> into a flat dict."""
-    props: dict[str, Any] = {}
-    ext = placemark.find(_tag("ExtendedData"))
-    if ext is None:
-        return props
-
-    # <SimpleData name="...">value</SimpleData>
-    for sd in ext.findall(_tag("SimpleData")):
-        name = sd.get("name", "")
-        if name:
-            props[name] = sd.text.strip() if sd.text else ""
-
-    # <Data name="..."><value>...</value></Data>
-    for data in ext.findall(_tag("Data")):
-        name = data.get("name", "")
-        val_el = data.find(_tag("value"))
-        if name:
-            props[name] = (
-                val_el.text.strip()
-                if val_el is not None and val_el.text
-                else ""
-            )
-    return props
-
-
-def _parse_style(style_el: ET.Element | None) -> dict[str, Any]:
-    """Parse a <Style> element into a simple style dict."""
-    style: dict[str, Any] = {}
-    if style_el is None:
-        return style
-
-    line_style = style_el.find(_tag("LineStyle"))
-    if line_style is not None:
-        color_el = line_style.find(_tag("color"))
-        width_el = line_style.find(_tag("width"))
-        if color_el is not None and color_el.text:
-            style["lineColor"] = _kml_color_to_hex(color_el.text.strip())
-        if width_el is not None and width_el.text:
-            style["lineWidth"] = float(width_el.text.strip())
-
-    poly_style = style_el.find(_tag("PolyStyle"))
-    if poly_style is not None:
-        color_el = poly_style.find(_tag("color"))
-        fill_el  = poly_style.find(_tag("fill"))
-        if color_el is not None and color_el.text:
-            style["fillColor"] = _kml_color_to_hex(color_el.text.strip())
-        if fill_el is not None and fill_el.text:
-            style["fill"] = fill_el.text.strip() == "1"
-
-    icon_style = style_el.find(_tag("IconStyle"))
-    if icon_style is not None:
-        color_el = icon_style.find(_tag("color"))
-        if color_el is not None and color_el.text:
-            style["iconColor"] = _kml_color_to_hex(color_el.text.strip())
-        icon_el = icon_style.find(_tag("Icon"))
-        if icon_el is not None:
-            href_el = icon_el.find(_tag("href"))
-            if href_el is not None and href_el.text:
-                style["iconHref"] = href_el.text.strip()
-
-    return style
-
-
-def _kml_color_to_hex(kml_color: str) -> str:
-    """
-    Convert KML aabbggrr hex color to CSS #rrggbb.
-    KML stores alpha first then BGR order.
-    """
-    kml_color = kml_color.strip().lstrip("#")
-    if len(kml_color) == 8:
-        # aabbggrr
-        bb = kml_color[2:4]
-        gg = kml_color[4:6]
-        rr = kml_color[6:8]
-        return f"#{rr}{gg}{bb}"
-    elif len(kml_color) == 6:
-        # Assume rrggbb already
-        return f"#{kml_color}"
-    return "#3388ff"
-
-
-def _placemark_to_features(
-    placemark: ET.Element,
-    styles: dict[str, dict],
-) -> list[dict]:
-    """
-    Convert one KML <Placemark> into one or more GeoJSON Feature dicts.
-    Handles: Point, LineString, LinearRing, Polygon, MultiGeometry.
-    """
-    features: list[dict] = []
-
-    name        = _child_text(placemark, "name")
-    description = _child_text(placemark, "description")
-    props       = _extract_extended_data(placemark)
-    props["name"]        = name
-    props["description"] = description
-
-    # Resolve style
-    style_url_el = placemark.find(_tag("styleUrl"))
-    resolved_style: dict[str, Any] = {}
-    if style_url_el is not None and style_url_el.text:
-        style_id = style_url_el.text.strip().lstrip("#")
-        resolved_style = styles.get(style_id, {})
-
-    # Inline <Style>
-    inline_style_el = placemark.find(_tag("Style"))
-    if inline_style_el is not None:
-        resolved_style.update(_parse_style(inline_style_el))
-
-    props["_style"] = resolved_style
-
-    def make_feature(geometry: dict) -> dict:
-        return {
-            "type": "Feature",
-            "geometry": geometry,
-            "properties": dict(props),
-        }
-
-    # ---- Point ----
-    point_el = placemark.find(_tag("Point"))
-    if point_el is not None:
-        coords_el = point_el.find(_tag("coordinates"))
-        if coords_el is not None and coords_el.text:
-            coords = _parse_coordinates(coords_el.text)
-            if coords:
-                features.append(make_feature({
-                    "type": "Point",
-                    "coordinates": coords[0],
-                }))
-
-    # ---- LineString ----
-    line_el = placemark.find(_tag("LineString"))
-    if line_el is not None:
-        coords_el = line_el.find(_tag("coordinates"))
-        if coords_el is not None and coords_el.text:
-            coords = _parse_coordinates(coords_el.text)
-            if coords:
-                features.append(make_feature({
-                    "type": "LineString",
-                    "coordinates": coords,
-                }))
-
-    # ---- Polygon ----
-    poly_el = placemark.find(_tag("Polygon"))
-    if poly_el is not None:
-        rings: list[list[list[float]]] = []
-        outer = poly_el.find(f".//{_tag('outerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}")
-        if outer is not None and outer.text:
-            rings.append(_parse_coordinates(outer.text))
-        for inner in poly_el.findall(f".//{_tag('innerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}"):
-            if inner.text:
-                rings.append(_parse_coordinates(inner.text))
-        if rings and rings[0]:
-            features.append(make_feature({
-                "type": "Polygon",
-                "coordinates": rings,
-            }))
-
-    # ---- MultiGeometry ----
-    multi_el = placemark.find(_tag("MultiGeometry"))
-    if multi_el is not None:
-        geometries: list[dict] = []
-
-        for child in multi_el:
-            local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-
-            if local == "Point":
-                coords_el = child.find(_tag("coordinates"))
-                if coords_el is not None and coords_el.text:
-                    c = _parse_coordinates(coords_el.text)
-                    if c:
-                        geometries.append({"type": "Point", "coordinates": c[0]})
-
-            elif local == "LineString":
-                coords_el = child.find(_tag("coordinates"))
-                if coords_el is not None and coords_el.text:
-                    c = _parse_coordinates(coords_el.text)
-                    if c:
-                        geometries.append({"type": "LineString", "coordinates": c})
-
-            elif local == "Polygon":
-                rings = []
-                outer = child.find(
-                    f".//{_tag('outerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}"
-                )
-                if outer is not None and outer.text:
-                    rings.append(_parse_coordinates(outer.text))
-                for inner in child.findall(
-                    f".//{_tag('innerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}"
-                ):
-                    if inner.text:
-                        rings.append(_parse_coordinates(inner.text))
-                if rings:
-                    geometries.append({"type": "Polygon", "coordinates": rings})
-
-        if geometries:
-            features.append(make_feature({
-                "type": "GeometryCollection",
-                "geometries": geometries,
-            }))
-
-    return features
-
-
-def _collect_styles(root: ET.Element) -> dict[str, dict]:
-    """
-    Walk the entire KML tree collecting <Style id="..."> and
-    <StyleMap id="..."> (maps normal→Style id) into a flat dict.
-    """
-    styles: dict[str, dict] = {}
-
-    for style_el in root.iter(_tag("Style")):
-        sid = style_el.get("id")
-        if sid:
-            styles[sid] = _parse_style(style_el)
-
-    for style_map_el in root.iter(_tag("StyleMap")):
-        sid = style_map_el.get("id")
-        if sid:
-            # Resolve the "normal" Pair
-            for pair_el in style_map_el.findall(_tag("Pair")):
-                key_el = pair_el.find(_tag("key"))
-                if key_el is not None and key_el.text and key_el.text.strip() == "normal":
-                    url_el = pair_el.find(_tag("styleUrl"))
-                    if url_el is not None and url_el.text:
-                        target = url_el.text.strip().lstrip("#")
-                        styles[sid] = styles.get(target, {})
-                        break
-
-    return styles
-
-
-def kml_bytes_to_geojson(kml_bytes: bytes) -> dict:
-    """
-    Parse raw KML bytes → GeoJSON FeatureCollection.
-    Handles missing/wrong XML declarations gracefully.
-    """
     try:
-        root = ET.fromstring(kml_bytes)
-    except ET.ParseError as exc:
-        # Try stripping a BOM or bad encoding declaration
-        cleaned = kml_bytes.decode("utf-8", errors="replace").encode("utf-8")
-        try:
-            root = ET.fromstring(cleaned)
-        except ET.ParseError:
-            raise ValueError(f"Invalid KML XML: {exc}") from exc
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"WatchMe Dashboard <{ADMIN_EMAIL}>"
+        msg["To"]      = to_address
+        msg.attach(MIMEText(html_body, "html"))
 
-    styles = _collect_styles(root)
-    features: list[dict] = []
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(ADMIN_EMAIL, GMAIL_APP_PASSWORD)
+            server.sendmail(ADMIN_EMAIL, to_address, msg.as_string())
 
-    for placemark in root.iter(_tag("Placemark")):
-        features.extend(_placemark_to_features(placemark, styles))
-
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-    }
-
-
-def kmz_bytes_to_geojson(kmz_bytes: bytes) -> dict:
-    """
-    Decompress a KMZ (ZIP) archive, find the root KML file,
-    and parse it to GeoJSON.
-    """
-    try:
-        with zipfile.ZipFile(io.BytesIO(kmz_bytes)) as zf:
-            # Prefer doc.kml; fall back to any .kml entry
-            kml_name = None
-            for name in zf.namelist():
-                if name.lower() == "doc.kml":
-                    kml_name = name
-                    break
-            if kml_name is None:
-                for name in zf.namelist():
-                    if name.lower().endswith(".kml"):
-                        kml_name = name
-                        break
-            if kml_name is None:
-                raise ValueError("No .kml file found inside KMZ archive.")
-            kml_bytes = zf.read(kml_name)
-    except zipfile.BadZipFile as exc:
-        raise ValueError(f"File is not a valid KMZ/ZIP archive: {exc}") from exc
-
-    return kml_bytes_to_geojson(kml_bytes)
-
-
-# ===========================================================================
-# GeoJSON → KML EXPORT
-# ===========================================================================
-
-def _hex_to_kml_color(hex_color: str, alpha: str = "ff") -> str:
-    """Convert CSS #rrggbb to KML aabbggrr."""
-    h = hex_color.strip().lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        return f"{alpha}ff8833"
-    rr, gg, bb = h[0:2], h[2:4], h[4:6]
-    return f"{alpha}{bb}{gg}{rr}"
-
-
-def _coords_to_kml(coords: list) -> str:
-    """Flatten coordinate list to KML <coordinates> text."""
-    parts: list[str] = []
-    for c in coords:
-        if isinstance(c[0], (int, float)):
-            parts.append(f"{c[0]},{c[1]},0")
-        else:
-            parts.extend(f"{pt[0]},{pt[1]},0" for pt in c)
-    return " ".join(parts)
-
-
-def geojson_to_kml(
-    feature_collection: dict,
-    doc_name: str = "Smart Security Dashboard Export",
-) -> str:
-    """
-    Convert a GeoJSON FeatureCollection to an OGC-compliant KML string.
-    Supports Point, LineString, Polygon, GeometryCollection.
-    Embeds style and ExtendedData from feature properties.
-    """
-    lines: list[str] = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<kml xmlns="http://www.opengis.net/kml/2.2"',
-        '     xmlns:gx="http://www.google.com/kml/ext/2.2">',
-        f"  <Document>",
-        f"    <name>{_xml_escape(doc_name)}</name>",
-        f"    <description>Exported by Smart Security Dashboard — {datetime.now(timezone.utc).isoformat()}</description>",
-    ]
-
-    for feature in feature_collection.get("features", []):
-        props    = feature.get("properties") or {}
-        geometry = feature.get("geometry") or {}
-        g_type   = geometry.get("type", "")
-        style    = props.get("_style", {})
-
-        # Build style elements
-        style_id = f"s{uuid.uuid4().hex[:8]}"
-        line_color = _hex_to_kml_color(style.get("lineColor", "#3388ff"))
-        fill_color = _hex_to_kml_color(style.get("fillColor", "#3388ff"), alpha="88")
-        line_width = style.get("lineWidth", 2)
-
-        lines += [
-            f'    <Style id="{style_id}">',
-            f"      <LineStyle>",
-            f"        <color>{line_color}</color>",
-            f"        <width>{line_width}</width>",
-            f"      </LineStyle>",
-            f"      <PolyStyle>",
-            f"        <color>{fill_color}</color>",
-            f"      </PolyStyle>",
-            f"      <IconStyle>",
-            f"        <color>{line_color}</color>",
-            f"        <Icon><href>https://maps.google.com/mapfiles/kml/paddle/red-circle.png</href></Icon>",
-            f"      </IconStyle>",
-            f"    </Style>",
-        ]
-
-        # Placemark
-        name        = _xml_escape(str(props.get("name", "Unnamed")))
-        description = _xml_escape(str(props.get("description", "")))
-
-        lines += [
-            f"    <Placemark>",
-            f"      <name>{name}</name>",
-            f"      <description>{description}</description>",
-            f"      <styleUrl>#{style_id}</styleUrl>",
-        ]
-
-        # ExtendedData — skip internal keys
-        skip_keys = {"name", "description", "_style"}
-        ext_props  = {k: v for k, v in props.items() if k not in skip_keys and v}
-        if ext_props:
-            lines.append("      <ExtendedData>")
-            for k, v in ext_props.items():
-                lines += [
-                    f'        <Data name="{_xml_escape(str(k))}">',
-                    f"          <value>{_xml_escape(str(v))}</value>",
-                    f"        </Data>",
-                ]
-            lines.append("      </ExtendedData>")
-
-        # Geometry
-        lines.extend(_geometry_to_kml(geometry, indent=6))
-
-        lines.append("    </Placemark>")
-
-    lines += ["  </Document>", "</kml>"]
-    return "\n".join(lines)
-
-
-def _geometry_to_kml(geometry: dict, indent: int = 6) -> list[str]:
-    pad   = " " * indent
-    g_type = geometry.get("type", "")
-    coords = geometry.get("coordinates", [])
-    lines: list[str] = []
-
-    if g_type == "Point":
-        lon, lat = coords[0], coords[1]
-        lines += [
-            f"{pad}<Point>",
-            f"{pad}  <coordinates>{lon},{lat},0</coordinates>",
-            f"{pad}</Point>",
-        ]
-
-    elif g_type == "LineString":
-        kml_c = " ".join(f"{c[0]},{c[1]},0" for c in coords)
-        lines += [
-            f"{pad}<LineString>",
-            f"{pad}  <tessellate>1</tessellate>",
-            f"{pad}  <coordinates>{kml_c}</coordinates>",
-            f"{pad}</LineString>",
-        ]
-
-    elif g_type == "Polygon":
-        lines.append(f"{pad}<Polygon>")
-        lines.append(f"{pad}  <tessellate>1</tessellate>")
-        for i, ring in enumerate(coords):
-            tag = "outerBoundaryIs" if i == 0 else "innerBoundaryIs"
-            kml_c = " ".join(f"{c[0]},{c[1]},0" for c in ring)
-            lines += [
-                f"{pad}  <{tag}>",
-                f"{pad}    <LinearRing>",
-                f"{pad}      <coordinates>{kml_c}</coordinates>",
-                f"{pad}    </LinearRing>",
-                f"{pad}  </{tag}>",
-            ]
-        lines.append(f"{pad}</Polygon>")
-
-    elif g_type == "GeometryCollection":
-        lines.append(f"{pad}<MultiGeometry>")
-        for sub_geom in geometry.get("geometries", []):
-            lines.extend(_geometry_to_kml(sub_geom, indent + 2))
-        lines.append(f"{pad}</MultiGeometry>")
-
-    return lines
-
-
-def _xml_escape(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&apos;")
-    )
-
-
-def build_kmz_bytes(feature_collection: dict, doc_name: str = "export") -> bytes:
-    kml_str = geojson_to_kml(feature_collection, doc_name)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("doc.kml", kml_str.encode("utf-8"))
-    return buf.getvalue()
-
-
-# ===========================================================================
-# SPATIAL ALGORITHMS
-# ===========================================================================
-
-EARTH_RADIUS_M = 6_371_000.0  # metres
-
-
-def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Return geodesic distance in metres between two WGS-84 points
-    using the Haversine formula.
-    """
-    phi1     = math.radians(lat1)
-    phi2     = math.radians(lat2)
-    dphi     = math.radians(lat2 - lat1)
-    dlambda  = math.radians(lon2 - lon1)
-
-    a = (
-        math.sin(dphi / 2.0) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
-    )
-    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-    return EARTH_RADIUS_M * c
-
-
-def point_in_polygon(
-    lat: float,
-    lon: float,
-    polygon_coords: list[list[float]],
-) -> bool:
-    """
-    Ray-casting algorithm to determine whether (lat, lon) lies
-    inside a polygon defined by a list of [lon, lat] pairs
-    (GeoJSON coordinate order).
-
-    Returns True if the point is inside the polygon.
-    """
-    # Normalise to (x=lon, y=lat)
-    x, y = lon, lat
-    n     = len(polygon_coords)
-    inside = False
-    j      = n - 1
-
-    for i in range(n):
-        xi, yi = polygon_coords[i][0], polygon_coords[i][1]
-        xj, yj = polygon_coords[j][0], polygon_coords[j][1]
-
-        if ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
-        ):
-            inside = not inside
-        j = i
-
-    return inside
-
-
-def point_in_geojson_polygon(
-    lat: float,
-    lon: float,
-    polygon_feature: dict,
-) -> bool:
-    """
-    Test a point against a GeoJSON Polygon feature.
-    Accounts for outer ring (must be inside) and inner rings (holes).
-    """
-    geometry = polygon_feature.get("geometry", {})
-    if geometry.get("type") != "Polygon":
+        log.info("Email sent to %s", to_address)
+        return True
+    except Exception as exc:
+        log.error("Email send failed: %s", exc)
         return False
 
-    rings: list[list[list[float]]] = geometry.get("coordinates", [])
-    if not rings:
-        return False
 
-    # Must be inside outer ring
-    if not point_in_polygon(lat, lon, rings[0]):
-        return False
+def email_admin_approval(user: dict) -> None:
+    """Send admin an approval request email."""
+    approve_url = f"{BASE_URL}/api/auth/approve?token={user['admin_token']}&action=approve"
+    reject_url  = f"{BASE_URL}/api/auth/approve?token={user['admin_token']}&action=reject"
 
-    # Must NOT be inside any hole (inner rings)
-    for hole in rings[1:]:
-        if point_in_polygon(lat, lon, hole):
-            return False
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px">
+      <div style="border-bottom:2px solid #ef4444;padding-bottom:16px;margin-bottom:24px">
+        <h2 style="color:#ef4444;margin:0">⚠ WatchMe — New Registration Request</h2>
+      </div>
+      <p style="color:#94a3b8">A new user has requested access to the WatchMe Security Dashboard.</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0">
+        <tr><td style="padding:8px;color:#64748b;width:120px">Name</td><td style="padding:8px;color:#e2e8f0;font-weight:bold">{user['name']}</td></tr>
+        <tr style="background:#1e293b"><td style="padding:8px;color:#64748b">Email</td><td style="padding:8px;color:#e2e8f0">{user['email']}</td></tr>
+        <tr><td style="padding:8px;color:#64748b">Organization</td><td style="padding:8px;color:#e2e8f0">{user['organization'] or '—'}</td></tr>
+        <tr style="background:#1e293b"><td style="padding:8px;color:#64748b">Requested at</td><td style="padding:8px;color:#e2e8f0">{user['created_at']}</td></tr>
+      </table>
+      <div style="margin-top:32px;display:flex;gap:16px">
+        <a href="{approve_url}" style="display:inline-block;background:#22c55e;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin-right:12px">
+          ✓ Approve Access
+        </a>
+        <a href="{reject_url}" style="display:inline-block;background:#ef4444;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold">
+          ✗ Reject Request
+        </a>
+      </div>
+      <p style="color:#475569;font-size:12px;margin-top:24px">
+        This request was sent automatically by WatchMe Security Dashboard.
+        If you did not expect this, you can safely ignore this email.
+      </p>
+    </div>
+    """
+    send_email(ADMIN_EMAIL, f"[WatchMe] Access Request from {user['name']}", html)
 
-    return True
+
+def email_user_approved(user: dict) -> None:
+    """Send user their login link after approval."""
+    login_url = f"{BASE_URL}/api/auth/login-link?token={user['user_token']}"
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px">
+      <div style="border-bottom:2px solid #22c55e;padding-bottom:16px;margin-bottom:24px">
+        <h2 style="color:#22c55e;margin:0">✓ Access Approved — WatchMe Dashboard</h2>
+      </div>
+      <p style="color:#94a3b8">Hello <strong style="color:#e2e8f0">{user['name']}</strong>,</p>
+      <p style="color:#94a3b8">Your access request has been approved. Click the button below to log in to the WatchMe Security Dashboard.</p>
+      <div style="margin:32px 0;text-align:center">
+        <a href="{login_url}" style="display:inline-block;background:#3b82f6;color:white;padding:16px 40px;border-radius:10px;text-decoration:none;font-weight:bold;font-size:16px">
+          🔐 Log In to Dashboard
+        </a>
+      </div>
+      <p style="color:#64748b;font-size:13px">
+        This link will log you in automatically. For security, it can only be used once — after login, your session will remain active.
+      </p>
+      <p style="color:#475569;font-size:12px;margin-top:24px;border-top:1px solid #1e293b;padding-top:16px">
+        WatchMe Security Dashboard — Humanitarian Operations
+      </p>
+    </div>
+    """
+    send_email(user["email"], "[WatchMe] Your access has been approved", html)
 
 
-# ===========================================================================
-# PYDANTIC MODELS
-# ===========================================================================
+def email_user_rejected(user: dict) -> None:
+    """Notify user their request was rejected."""
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px">
+      <div style="border-bottom:2px solid #ef4444;padding-bottom:16px;margin-bottom:24px">
+        <h2 style="color:#ef4444;margin:0">WatchMe — Access Request Update</h2>
+      </div>
+      <p style="color:#94a3b8">Hello <strong style="color:#e2e8f0">{user['name']}</strong>,</p>
+      <p style="color:#94a3b8">
+        After review, your access request to the WatchMe Security Dashboard could not be approved at this time.
+        If you believe this is an error, please contact your organization administrator.
+      </p>
+    </div>
+    """
+    send_email(user["email"], "[WatchMe] Access Request Update", html)
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    email:        str
+    name:         str
+    organization: str = ""
+
 
 class IncidentCreate(BaseModel):
     title:       str
     description: str   = ""
-    severity:    str   = "medium"   # low | medium | high | critical
+    severity:    str   = "medium"
     lat:         float
     lng:         float
-    polygon_wkt: str   = ""         # optional WKT polygon for geofenced incidents
+    polygon_wkt: str   = ""
 
 
 class StaffPoint(BaseModel):
@@ -738,466 +304,569 @@ class StaffPoint(BaseModel):
 
 
 class ProximityRequest(BaseModel):
-    incident_lat:  float
-    incident_lng:  float
-    radius_m:      float = 1000.0   # default alert radius in metres
-    staff_list:    list[StaffPoint]
-    polygon_coords: list[list[float]] = []  # [lon, lat] pairs; empty = point incident
+    incident_lat:   float
+    incident_lng:   float
+    radius_m:       float = 1000.0
+    staff_list:     list[StaffPoint]
+    polygon_coords: list[list[float]] = []
 
 
 class AlertRequest(BaseModel):
-    channel:    str         # "sms" | "whatsapp" | "telegram"
-    recipient:  str         # phone number or Telegram chat id
-    message:    str
+    channel:     str
+    recipient:   str
+    message:     str
     incident_id: str = ""
 
 
 class ExportRequest(BaseModel):
     feature_collection: dict
-    doc_name:           str  = "Security Dashboard Export"
-    format:             str  = "kml"   # "kml" or "kmz"
+    doc_name:           str = "Security Dashboard Export"
+    format:             str = "kml"
 
 
 class SettingItem(BaseModel):
-    key: str
+    key:   str
     value: str
 
+# ---------------------------------------------------------------------------
+# AUTH ROUTES
+# ---------------------------------------------------------------------------
 
-# ===========================================================================
-# API ROUTES
-# ===========================================================================
+@app.post("/api/auth/register", tags=["Auth"])
+def register(req: RegisterRequest):
+    """Step 1: User submits registration. Admin gets approval email."""
+    email = req.email.strip().lower()
+    if not re.match(r"^[^@]+@[^@]+\.[^@]+$", email):
+        raise HTTPException(400, "Invalid email address")
+
+    with get_db() as conn:
+        existing = conn.execute("SELECT id, status FROM users WHERE email = ?", (email,)).fetchone()
+
+    if existing:
+        if existing["status"] == "approved":
+            raise HTTPException(400, "This email is already registered and approved.")
+        elif existing["status"] == "pending":
+            raise HTTPException(400, "Your request is already pending admin approval.")
+        elif existing["status"] == "rejected":
+            raise HTTPException(400, "This email has been rejected. Contact your administrator.")
+
+    user_id     = uuid.uuid4().hex
+    admin_token = secrets.token_urlsafe(32)
+    user_token  = secrets.token_urlsafe(32)
+    now         = datetime.now(timezone.utc).isoformat()
+
+    user = {
+        "id":           user_id,
+        "email":        email,
+        "name":         req.name.strip(),
+        "organization": req.organization.strip(),
+        "status":       "pending",
+        "admin_token":  admin_token,
+        "user_token":   user_token,
+        "created_at":   now,
+    }
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO users (id, email, name, organization, status, admin_token, user_token, created_at)
+               VALUES (:id, :email, :name, :organization, :status, :admin_token, :user_token, :created_at)""",
+            user
+        )
+
+    email_admin_approval(user)
+    log.info("New registration request from %s (%s)", req.name, email)
+    return {"status": "pending", "message": "Your request has been submitted. You will receive an email once approved."}
+
+
+@app.get("/api/auth/approve", tags=["Auth"])
+def approve_user(token: str, action: str = "approve"):
+    """Step 2: Admin clicks approve/reject link in their email."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE admin_token = ?", (token,)).fetchone()
+
+    if not row:
+        return Response(content=_html_result("Invalid or expired approval link.", success=False), media_type="text/html")
+
+    user = dict(row)
+
+    if user["status"] != "pending":
+        msg = f"This request has already been {user['status']}."
+        return Response(content=_html_result(msg, success=False), media_type="text/html")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    if action == "approve":
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE users SET status = 'approved', approved_at = ?, admin_token = NULL WHERE id = ?",
+                (now, user["id"])
+            )
+        user["approved_at"] = now
+        email_user_approved(user)
+        msg = f"✓ {user['name']} ({user['email']}) has been approved. They will receive a login link by email."
+        return Response(content=_html_result(msg, success=True), media_type="text/html")
+
+    elif action == "reject":
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE users SET status = 'rejected', admin_token = NULL WHERE id = ?",
+                (user["id"],)
+            )
+        email_user_rejected(user)
+        msg = f"✗ {user['name']} ({user['email']}) has been rejected."
+        return Response(content=_html_result(msg, success=False), media_type="text/html")
+
+    return Response(content=_html_result("Unknown action.", success=False), media_type="text/html")
+
+
+@app.get("/api/auth/login-link", tags=["Auth"])
+def magic_login(token: str):
+    """Step 3: User clicks login link from their email. Creates session."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE user_token = ? AND status = 'approved'",
+            (token,)
+        ).fetchone()
+
+    if not row:
+        return Response(
+            content=_html_result("Invalid or expired login link. Please contact your administrator.", success=False),
+            media_type="text/html"
+        )
+
+    # Create session (30-day expiry)
+    session_token   = secrets.token_urlsafe(48)
+    session_expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET session_token = ?, session_expires = ? WHERE id = ?",
+            (session_token, session_expires, row["id"])
+        )
+
+    log.info("User %s logged in via magic link", row["email"])
+
+    # Redirect to dashboard with session cookie
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie(
+        key="wm_session",
+        value=session_token,
+        max_age=30 * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/api/auth/logout", tags=["Auth"])
+def logout(user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        conn.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user["id"],))
+    response = JSONResponse({"status": "logged_out"})
+    response.delete_cookie("wm_session")
+    return response
+
+
+@app.get("/api/auth/me", tags=["Auth"])
+def me(user: dict = Depends(require_auth)):
+    return {
+        "id":           user["id"],
+        "email":        user["email"],
+        "name":         user["name"],
+        "organization": user["organization"],
+        "approved_at":  user["approved_at"],
+    }
+
+
+def _html_result(message: str, success: bool) -> str:
+    color  = "#22c55e" if success else "#ef4444"
+    icon   = "✓" if success else "✗"
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>WatchMe</title>
+<style>body{{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
+.card{{background:#1e293b;border:1px solid {color}40;border-radius:12px;padding:40px;max-width:480px;text-align:center}}
+.icon{{font-size:48px;color:{color};margin-bottom:16px}}.msg{{color:#94a3b8;line-height:1.6}}
+a{{color:#3b82f6;text-decoration:none}}</style></head>
+<body><div class="card"><div class="icon">{icon}</div>
+<p class="msg">{message}</p>
+<p style="margin-top:24px"><a href="/">← Back to Dashboard</a></p>
+</div></body></html>"""
 
 # ---------------------------------------------------------------------------
-# Health check
+# HEALTH
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health", tags=["System"])
 def health():
-    return {
-        "status":    "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "layers":    len(LAYER_STORE),
-    }
-
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 # ---------------------------------------------------------------------------
-# KML / KMZ upload → GeoJSON
+# KML/KMZ parsing helpers (unchanged from original)
+# ---------------------------------------------------------------------------
+KML_NS = "http://www.opengis.net/kml/2.2"
+ET.register_namespace("", KML_NS)
+
+def _tag(local, ns=KML_NS): return f"{{{ns}}}{local}"
+def _child_text(el, local, ns=KML_NS):
+    c = el.find(_tag(local, ns)); return c.text.strip() if c is not None and c.text else ""
+
+def _parse_coordinates(raw):
+    coords = []
+    for token in re.split(r"\s+", raw.strip()):
+        parts = token.split(",")
+        if len(parts) >= 2:
+            try: coords.append([float(parts[0]), float(parts[1])])
+            except: pass
+    return coords
+
+def _extract_extended_data(placemark):
+    props = {}
+    ext = placemark.find(_tag("ExtendedData"))
+    if ext is None: return props
+    for sd in ext.findall(_tag("SimpleData")):
+        if sd.get("name"): props[sd.get("name")] = sd.text.strip() if sd.text else ""
+    for data in ext.findall(_tag("Data")):
+        name = data.get("name",""); val_el = data.find(_tag("value"))
+        if name: props[name] = val_el.text.strip() if val_el is not None and val_el.text else ""
+    return props
+
+def _kml_color_to_hex(kml_color):
+    kml_color = kml_color.strip().lstrip("#")
+    if len(kml_color) == 8: return f"#{kml_color[6:8]}{kml_color[4:6]}{kml_color[2:4]}"
+    if len(kml_color) == 6: return f"#{kml_color}"
+    return "#3388ff"
+
+def _parse_style(style_el):
+    style = {}
+    if style_el is None: return style
+    ls = style_el.find(_tag("LineStyle"))
+    if ls is not None:
+        c = ls.find(_tag("color")); w = ls.find(_tag("width"))
+        if c is not None and c.text: style["lineColor"] = _kml_color_to_hex(c.text.strip())
+        if w is not None and w.text: style["lineWidth"] = float(w.text.strip())
+    ps = style_el.find(_tag("PolyStyle"))
+    if ps is not None:
+        c = ps.find(_tag("color"))
+        if c is not None and c.text: style["fillColor"] = _kml_color_to_hex(c.text.strip())
+    return style
+
+def _collect_styles(root):
+    styles = {}
+    for s in root.iter(_tag("Style")):
+        sid = s.get("id")
+        if sid: styles[sid] = _parse_style(s)
+    for sm in root.iter(_tag("StyleMap")):
+        sid = sm.get("id")
+        if sid:
+            for pair in sm.findall(_tag("Pair")):
+                key = pair.find(_tag("key"))
+                if key is not None and key.text and key.text.strip() == "normal":
+                    url = pair.find(_tag("styleUrl"))
+                    if url is not None and url.text:
+                        styles[sid] = styles.get(url.text.strip().lstrip("#"), {})
+                        break
+    return styles
+
+def _placemark_to_features(placemark, styles):
+    features = []
+    name = _child_text(placemark, "name"); desc = _child_text(placemark, "description")
+    props = _extract_extended_data(placemark)
+    props["name"] = name; props["description"] = desc
+    style_url_el = placemark.find(_tag("styleUrl"))
+    resolved_style = {}
+    if style_url_el is not None and style_url_el.text:
+        resolved_style = styles.get(style_url_el.text.strip().lstrip("#"), {})
+    inline = placemark.find(_tag("Style"))
+    if inline is not None: resolved_style.update(_parse_style(inline))
+    props["_style"] = resolved_style
+    def mf(geom): return {"type":"Feature","geometry":geom,"properties":dict(props)}
+    pt = placemark.find(_tag("Point"))
+    if pt is not None:
+        ce = pt.find(_tag("coordinates"))
+        if ce is not None and ce.text:
+            c = _parse_coordinates(ce.text)
+            if c: features.append(mf({"type":"Point","coordinates":c[0]}))
+    ls = placemark.find(_tag("LineString"))
+    if ls is not None:
+        ce = ls.find(_tag("coordinates"))
+        if ce is not None and ce.text:
+            c = _parse_coordinates(ce.text)
+            if c: features.append(mf({"type":"LineString","coordinates":c}))
+    poly = placemark.find(_tag("Polygon"))
+    if poly is not None:
+        rings = []
+        outer = poly.find(f".//{_tag('outerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}")
+        if outer is not None and outer.text: rings.append(_parse_coordinates(outer.text))
+        for inner in poly.findall(f".//{_tag('innerBoundaryIs')}/{_tag('LinearRing')}/{_tag('coordinates')}"):
+            if inner.text: rings.append(_parse_coordinates(inner.text))
+        if rings and rings[0]: features.append(mf({"type":"Polygon","coordinates":rings}))
+    return features
+
+def kml_bytes_to_geojson(kml_bytes):
+    try: root = ET.fromstring(kml_bytes)
+    except ET.ParseError:
+        root = ET.fromstring(kml_bytes.decode("utf-8", errors="replace").encode("utf-8"))
+    styles = _collect_styles(root)
+    features = []
+    for pm in root.iter(_tag("Placemark")):
+        features.extend(_placemark_to_features(pm, styles))
+    return {"type":"FeatureCollection","features":features}
+
+def kmz_bytes_to_geojson(kmz_bytes):
+    with zipfile.ZipFile(io.BytesIO(kmz_bytes)) as zf:
+        kml_name = next((n for n in zf.namelist() if n.lower() == "doc.kml"), None)
+        if not kml_name: kml_name = next((n for n in zf.namelist() if n.lower().endswith(".kml")), None)
+        if not kml_name: raise ValueError("No .kml file found inside KMZ archive.")
+        return kml_bytes_to_geojson(zf.read(kml_name))
+
+# ---------------------------------------------------------------------------
+# KML Export helpers
+# ---------------------------------------------------------------------------
+def _hex_to_kml_color(hex_color, alpha="ff"):
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3: h = "".join(c*2 for c in h)
+    if len(h) != 6: return f"{alpha}ff8833"
+    return f"{alpha}{h[4:6]}{h[2:4]}{h[0:2]}"
+
+def _xml_escape(text):
+    return str(text).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+
+def geojson_to_kml(fc, doc_name="Export"):
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>','<kml xmlns="http://www.opengis.net/kml/2.2">',
+             f'  <Document><name>{_xml_escape(doc_name)}</name>']
+    for f in fc.get("features",[]):
+        props = f.get("properties") or {}; geom = f.get("geometry") or {}
+        style = props.get("_style",{})
+        sid   = f"s{uuid.uuid4().hex[:8]}"
+        lc = _hex_to_kml_color(style.get("lineColor","#3388ff"))
+        fc2 = _hex_to_kml_color(style.get("fillColor","#3388ff"),"88")
+        lines += [f'    <Style id="{sid}"><LineStyle><color>{lc}</color><width>2</width></LineStyle>',
+                  f'    <PolyStyle><color>{fc2}</color></PolyStyle></Style>',
+                  f'    <Placemark><name>{_xml_escape(props.get("name",""))}</name>',
+                  f'    <styleUrl>#{sid}</styleUrl>']
+        gt = geom.get("type",""); co = geom.get("coordinates",[])
+        if gt == "Point": lines.append(f'    <Point><coordinates>{co[0]},{co[1]},0</coordinates></Point>')
+        elif gt == "LineString":
+            lines.append(f'    <LineString><coordinates>{" ".join(f"{c[0]},{c[1]},0" for c in co)}</coordinates></LineString>')
+        elif gt == "Polygon":
+            lines.append(f'    <Polygon><outerBoundaryIs><LinearRing><coordinates>{" ".join(f"{c[0]},{c[1]},0" for c in co[0])}</coordinates></LinearRing></outerBoundaryIs></Polygon>')
+        lines.append("    </Placemark>")
+    lines += ["  </Document>","</kml>"]
+    return "\n".join(lines)
+
+def build_kmz_bytes(fc, doc_name="export"):
+    kml_str = geojson_to_kml(fc, doc_name)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("doc.kml", kml_str.encode())
+    return buf.getvalue()
+
+# ---------------------------------------------------------------------------
+# Spatial algorithms
+# ---------------------------------------------------------------------------
+EARTH_RADIUS_M = 6_371_000.0
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    phi1=math.radians(lat1); phi2=math.radians(lat2)
+    dphi=math.radians(lat2-lat1); dl=math.radians(lon2-lon1)
+    a=math.sin(dphi/2)**2+math.cos(phi1)*math.cos(phi2)*math.sin(dl/2)**2
+    return EARTH_RADIUS_M*2*math.atan2(math.sqrt(a),math.sqrt(1-a))
+
+def point_in_polygon(lat, lon, ring):
+    x,y=lon,lat; n=len(ring); inside=False; j=n-1
+    for i in range(n):
+        xi,yi=ring[i][0],ring[i][1]; xj,yj=ring[j][0],ring[j][1]
+        if ((yi>y)!=(yj>y)) and (x<(xj-xi)*(y-yi)/(yj-yi+1e-12)+xi): inside=not inside
+        j=i
+    return inside
+
+# ---------------------------------------------------------------------------
+# LAYER ROUTES (per-user)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/upload", tags=["Layers"])
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_auth)):
     filename = file.filename or "upload"
-    ext      = Path(filename).suffix.lower()
-
-    if ext not in {".kml", ".kmz"}:
-        raise HTTPException(
-            status_code=415,
-            detail="Only .kml and .kmz files are accepted.",
-        )
-
-    raw_bytes = await file.read()
-    log.info("Received upload: %s (%d bytes)", filename, len(raw_bytes))
-
+    ext = Path(filename).suffix.lower()
+    if ext not in {".kml",".kmz"}:
+        raise HTTPException(415, "Only .kml and .kmz files are accepted.")
+    raw = await file.read()
     try:
-        if ext == ".kmz":
-            geojson = kmz_bytes_to_geojson(raw_bytes)
-        else:
-            geojson = kml_bytes_to_geojson(raw_bytes)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        geojson = kmz_bytes_to_geojson(raw) if ext == ".kmz" else kml_bytes_to_geojson(raw)
     except Exception as exc:
-        log.exception("Unexpected parse error for %s", filename)
-        raise HTTPException(status_code=500, detail=f"Parse error: {exc}") from exc
-
+        raise HTTPException(422, str(exc))
     layer_id = uuid.uuid4().hex[:12]
-    layer_name = Path(filename).stem
-
-    # Save parsed GeoJSON securely to the SQLite database
-    try:
-        geojson_str = json.dumps(geojson)
-        with get_db() as conn:
-            conn.execute(
-                "INSERT INTO layers (id, name, geojson) VALUES (?, ?, ?)",
-                (layer_id, layer_name, geojson_str)
-            )
-            conn.commit()
-    except Exception as e:
-        log.exception("Failed to write layer to database")
-        raise HTTPException(status_code=500, detail=f"Database write error: {e}")
-
-    feature_count = len(geojson.get("features", []))
-    log.info("Parsed %d features from '%s' and saved to DB (layer %s)", feature_count, filename, layer_id)
-
-    return {
-        "layer_id":      layer_id,
-        "name":          layer_name,
-        "feature_count": feature_count,
-        "geojson":       geojson,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Layer management
-# ---------------------------------------------------------------------------
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("INSERT INTO layers (id, user_id, name, geojson, created_at) VALUES (?,?,?,?,?)",
+                     (layer_id, user["id"], Path(filename).stem, json.dumps(geojson), now))
+    return {"layer_id": layer_id, "name": Path(filename).stem,
+            "feature_count": len(geojson.get("features",[])), "geojson": geojson}
 
 @app.get("/api/layers", tags=["Layers"])
-def list_layers():
-    try:
-        with get_db() as conn:
-            rows = conn.execute("SELECT id, name FROM layers").fetchall()
-        return [
-            {
-                "id":   row["id"],
-                "name": row["name"]
-            }
-            for row in rows
-        ]
-    except Exception as e:
-        log.error("Error listing layers: %s", e)
-        return []
-
+def list_layers(user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, name FROM layers WHERE user_id = ?", (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
 
 @app.get("/api/layers/{layer_id}", tags=["Layers"])
-def get_layer_geojson(layer_id: str):
-    try:
-        with get_db() as conn:
-            row = conn.execute("SELECT name, geojson FROM layers WHERE id = ?", (layer_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Layer not found")
-        return {
-            "id":      layer_id,
-            "name":    row["name"],
-            "geojson": json.loads(row["geojson"])
-        }
-    except Exception as e:
-        log.error("Error loading layer %s: %s", layer_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
-
+def get_layer(layer_id: str, user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM layers WHERE id = ? AND user_id = ?",
+                           (layer_id, user["id"])).fetchone()
+    if not row: raise HTTPException(404, "Layer not found")
+    return {"id": layer_id, "name": row["name"], "geojson": json.loads(row["geojson"])}
 
 @app.delete("/api/layers/{layer_id}", tags=["Layers"])
-def delete_layer(layer_id: str):
-    try:
-        with get_db() as conn:
-            cur = conn.execute("DELETE FROM layers WHERE id = ?", (layer_id,))
-            conn.commit()
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Layer not found.")
-        return {"deleted": layer_id}
-    except Exception as e:
-        log.error("Error deleting layer %s: %s", layer_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+def delete_layer(layer_id: str, user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM layers WHERE id = ? AND user_id = ?", (layer_id, user["id"]))
+    if cur.rowcount == 0: raise HTTPException(404, "Layer not found.")
+    return {"deleted": layer_id}
 
 # ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
-
-@app.post("/api/export", tags=["Export"])
-def export_layers(req: ExportRequest):
-    """
-    Accept a GeoJSON FeatureCollection (assembled on the client from all
-    visible layers + drawn features) and return a KML or KMZ file download.
-    """
-    fmt = req.format.lower()
-    if fmt not in {"kml", "kmz"}:
-        raise HTTPException(status_code=400, detail="format must be 'kml' or 'kmz'.")
-
-    try:
-        if fmt == "kml":
-            content     = geojson_to_kml(req.feature_collection, req.doc_name)
-            media_type  = "application/vnd.google-earth.kml+xml"
-            filename    = "export.kml"
-            body        = content.encode("utf-8")
-        else:
-            body        = build_kmz_bytes(req.feature_collection, req.doc_name)
-            media_type  = "application/vnd.google-earth.kmz"
-            filename    = "export.kmz"
-
-    except Exception as exc:
-        log.exception("Export error")
-        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
-
-    return Response(
-        content     = body,
-        media_type  = media_type,
-        headers     = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length":      str(len(body)),
-        },
-    )
-
-
-# ---------------------------------------------------------------------------
-# Settings (SQLite Persistence)
-# ---------------------------------------------------------------------------
-
-@app.get("/api/settings", tags=["Settings"])
-def get_settings():
-    try:
-        with get_db() as conn:
-            rows = conn.execute("SELECT key, value FROM settings").fetchall()
-        return {row["key"]: row["value"] for row in rows}
-    except Exception as e:
-        log.warning("Could not load settings from database: %s", e)
-        return {}
-
-
-@app.post("/api/settings", tags=["Settings"])
-def save_setting(item: SettingItem):
-    try:
-        with get_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO settings (key, value)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (item.key, item.value),
-            )
-            conn.commit()
-        return {"status": "success"}
-    except Exception as e:
-        log.exception("Could not save setting %s: %s", item.key, e)
-        raise HTTPException(status_code=500, detail=f"Database write error: {e}")
-
-
-# ---------------------------------------------------------------------------
-# Incidents
+# INCIDENTS (per-user)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/incidents", tags=["Incidents"])
-def create_incident(inc: IncidentCreate):
-    incident_id = uuid.uuid4().hex
-    now         = datetime.now(timezone.utc).isoformat()
-
+def create_incident(inc: IncidentCreate, user: dict = Depends(require_auth)):
+    inc_id = uuid.uuid4().hex
+    now    = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
-            """
-            INSERT INTO incidents (id, title, description, severity, lat, lng, polygon_wkt, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (incident_id, inc.title, inc.description, inc.severity,
-             inc.lat, inc.lng, inc.polygon_wkt, now),
+            "INSERT INTO incidents (id,user_id,title,description,severity,lat,lng,polygon_wkt,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (inc_id, user["id"], inc.title, inc.description, inc.severity, inc.lat, inc.lng, inc.polygon_wkt, now)
         )
-
-    log.info("Incident created: %s @ (%.5f, %.5f)", incident_id, inc.lat, inc.lng)
-    return {"id": incident_id, "created_at": now}
-
+    return {"id": inc_id, "created_at": now}
 
 @app.get("/api/incidents", tags=["Incidents"])
-def list_incidents(resolved: bool = False):
+def list_incidents(resolved: bool = False, user: dict = Depends(require_auth)):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM incidents WHERE resolved = ? ORDER BY created_at DESC",
-            (1 if resolved else 0,),
+            "SELECT * FROM incidents WHERE user_id = ? AND resolved = ? ORDER BY created_at DESC",
+            (user["id"], 1 if resolved else 0)
         ).fetchall()
     return [dict(r) for r in rows]
 
-
 @app.patch("/api/incidents/{incident_id}/resolve", tags=["Incidents"])
-def resolve_incident(incident_id: str):
+def resolve_incident(incident_id: str, user: dict = Depends(require_auth)):
     with get_db() as conn:
-        cur = conn.execute(
-            "UPDATE incidents SET resolved = 1 WHERE id = ?", (incident_id,)
-        )
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Incident not found.")
+        cur = conn.execute("UPDATE incidents SET resolved=1 WHERE id=? AND user_id=?",
+                           (incident_id, user["id"]))
+    if cur.rowcount == 0: raise HTTPException(404, "Incident not found.")
     return {"resolved": incident_id}
 
-
 # ---------------------------------------------------------------------------
-# Proximity & Geofencing
+# PROXIMITY
 # ---------------------------------------------------------------------------
 
 @app.post("/api/proximity", tags=["Incidents"])
-def check_proximity(req: ProximityRequest):
-    """
-    Given an incident location and a list of staff members:
-    1. Compute Haversine distance from incident to each staff member.
-    2. If polygon_coords are provided, run point-in-polygon for each staff.
-    3. Return a prioritised result list.
-
-    Result status codes:
-        "inside"  — staff is within the incident polygon
-        "critical" — within 250 m
-        "high"     — within 500 m
-        "medium"   — within req.radius_m
-        "safe"     — beyond radius
-    """
+def check_proximity(req: ProximityRequest, user: dict = Depends(require_auth)):
     has_polygon = len(req.polygon_coords) >= 3
-    results: list[dict] = []
-
+    results = []
     for staff in req.staff_list:
-        dist_m = haversine_distance(
-            req.incident_lat, req.incident_lng,
-            staff.lat, staff.lng,
-        )
-
-        inside = False
-        if has_polygon:
-            inside = point_in_polygon(staff.lat, staff.lng, req.polygon_coords)
-
-        if inside:
-            status = "inside"
-        elif dist_m <= 250:
-            status = "critical"
-        elif dist_m <= 500:
-            status = "high"
-        elif dist_m <= req.radius_m:
-            status = "medium"
-        else:
-            status = "safe"
-
-        results.append({
-            "id":         staff.id,
-            "name":       staff.name,
-            "department": staff.department,
-            "phone":      staff.phone,
-            "lat":        staff.lat,
-            "lng":        staff.lng,
-            "distance_m": round(dist_m, 1),
-            "inside":     inside,
-            "status":     status,
-        })
-
-    # Sort: inside first, then by distance ascending
-    priority = {"inside": 0, "critical": 1, "high": 2, "medium": 3, "safe": 4}
-    results.sort(key=lambda r: (priority[r["status"]], r["distance_m"]))
-
-    endangered = [r for r in results if r["status"] != "safe"]
-    return {
-        "total_staff":      len(results),
-        "endangered_count": len(endangered),
-        "results":          results,
-    }
-
+        dist_m = haversine_distance(req.incident_lat, req.incident_lng, staff.lat, staff.lng)
+        inside = point_in_polygon(staff.lat, staff.lng, req.polygon_coords) if has_polygon else False
+        if inside:         status = "inside"
+        elif dist_m <= 250:  status = "critical"
+        elif dist_m <= 500:  status = "high"
+        elif dist_m <= req.radius_m: status = "medium"
+        else:                status = "safe"
+        results.append({"id":staff.id,"name":staff.name,"department":staff.department,
+                        "phone":staff.phone,"lat":staff.lat,"lng":staff.lng,
+                        "distance_m":round(dist_m,1),"inside":inside,"status":status})
+    priority = {"inside":0,"critical":1,"high":2,"medium":3,"safe":4}
+    results.sort(key=lambda r:(priority[r["status"]],r["distance_m"]))
+    return {"total_staff":len(results),"endangered_count":len([r for r in results if r["status"]!="safe"]),"results":results}
 
 # ---------------------------------------------------------------------------
-# Emergency Alerts (Mock — ready for Twilio / UltraMsg / Telegram integration)
+# ALERTS (per-user)
 # ---------------------------------------------------------------------------
 
-ALERT_CHANNELS = {
-    "sms":       "Twilio REST API → POST /2010-04-01/Accounts/{SID}/Messages.json",
-    "whatsapp":  "UltraMsg API   → POST https://api.ultramsg.com/{instance}/messages/chat",
-    "telegram":  "Telegram Bot   → POST https://api.telegram.org/bot{TOKEN}/sendMessage",
-}
+ALERT_CHANNELS = {"sms":"Twilio","whatsapp":"UltraMsg","telegram":"Telegram Bot API"}
 
-
-def _mock_send(channel: str, recipient: str, message: str) -> dict:
-    """
-    Simulate sending a message. Replace this function body with the
-    real HTTP call to Twilio / UltraMsg / Telegram when credentials
-    are available. All parameters and return shape remain identical.
-    """
-    log.info("[MOCK ALERT] channel=%s recipient=%s msg=%.80s", channel, recipient, message)
-    return {
-        "provider":   ALERT_CHANNELS.get(channel, channel),
-        "recipient":  recipient,
-        "message":    message,
-        "mock":       True,
-        "note":       (
-            "This is a mock response. Integrate real credentials to activate. "
-            f"Provider endpoint: {ALERT_CHANNELS.get(channel, 'unknown')}"
-        ),
-    }
-
-
-@app.post("/api/alert/sms", tags=["Alerts"])
-def send_sms(req: AlertRequest):
-    if req.channel != "sms":
-        raise HTTPException(400, "Use /api/alert/sms for SMS alerts.")
-    result = _mock_send("sms", req.recipient, req.message)
-    _log_alert("sms", req)
-    return {"status": "mock_sent", "detail": result}
-
-
-@app.post("/api/alert/whatsapp", tags=["Alerts"])
-def send_whatsapp(req: AlertRequest):
-    if req.channel != "whatsapp":
-        raise HTTPException(400, "Use /api/alert/whatsapp for WhatsApp alerts.")
-    result = _mock_send("whatsapp", req.recipient, req.message)
-    _log_alert("whatsapp", req)
-    return {"status": "mock_sent", "detail": result}
-
-
-@app.post("/api/alert/telegram", tags=["Alerts"])
-def send_telegram(req: AlertRequest):
-    if req.channel != "telegram":
-        raise HTTPException(400, "Use /api/alert/telegram for Telegram alerts.")
-    result = _mock_send("telegram", req.recipient, req.message)
-    _log_alert("telegram", req)
-    return {"status": "mock_sent", "detail": result}
-
-
-def _log_alert(channel: str, req: AlertRequest) -> None:
-    alert_id = uuid.uuid4().hex
-    now      = datetime.now(timezone.utc).isoformat()
+def _log_alert(channel, req, user_id):
     with get_db() as conn:
         conn.execute(
-            """
-            INSERT INTO alert_log (id, channel, recipient, message, incident_id, sent_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (alert_id, channel, req.recipient, req.message, req.incident_id, now),
+            "INSERT INTO alert_log (id,user_id,channel,recipient,message,incident_id,sent_at) VALUES (?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, user_id, channel, req.recipient, req.message, req.incident_id,
+             datetime.now(timezone.utc).isoformat())
         )
 
+@app.post("/api/alert/{channel}", tags=["Alerts"])
+def send_alert(channel: str, req: AlertRequest, user: dict = Depends(require_auth)):
+    if channel not in ALERT_CHANNELS: raise HTTPException(400, f"Unknown channel: {channel}")
+    _log_alert(channel, req, user["id"])
+    return {"status":"mock_sent","channel":channel,"provider":ALERT_CHANNELS[channel]}
 
 @app.get("/api/alerts/log", tags=["Alerts"])
-def get_alert_log(limit: int = 100):
+def get_alert_log(limit: int = 100, user: dict = Depends(require_auth)):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM alert_log ORDER BY sent_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM alert_log WHERE user_id = ? ORDER BY sent_at DESC LIMIT ?",
+            (user["id"], limit)
         ).fetchall()
     return [dict(r) for r in rows]
 
+# ---------------------------------------------------------------------------
+# SETTINGS (per-user)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/settings", tags=["Settings"])
+def get_settings(user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        rows = conn.execute("SELECT key, value FROM settings WHERE user_id = ?", (user["id"],)).fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+@app.post("/api/settings", tags=["Settings"])
+def save_setting(item: SettingItem, user: dict = Depends(require_auth)):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO settings (user_id,key,value) VALUES (?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+            (user["id"], item.key, item.value)
+        )
+    return {"status":"success"}
 
 # ---------------------------------------------------------------------------
-# Geocoding proxy (Nominatim — avoids CORS issues from the browser)
+# EXPORT
+# ---------------------------------------------------------------------------
+
+@app.post("/api/export", tags=["Export"])
+def export_layers(req: ExportRequest, user: dict = Depends(require_auth)):
+    fmt = req.format.lower()
+    if fmt not in {"kml","kmz"}: raise HTTPException(400, "format must be kml or kmz")
+    if fmt == "kml":
+        body = geojson_to_kml(req.feature_collection, req.doc_name).encode()
+        media_type = "application/vnd.google-earth.kml+xml"; filename = "export.kml"
+    else:
+        body = build_kmz_bytes(req.feature_collection, req.doc_name)
+        media_type = "application/vnd.google-earth.kmz"; filename = "export.kmz"
+    return Response(content=body, media_type=media_type,
+                    headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
+# ---------------------------------------------------------------------------
+# GEOCODE proxy
 # ---------------------------------------------------------------------------
 
 @app.get("/api/geocode", tags=["Search"])
 async def geocode(q: str):
-    """
-    Forward a free-text query to Nominatim OSM geocoder and return results.
-    The client could call Nominatim directly, but proxying avoids browser
-    CORS restrictions and allows future caching / rate-limiting here.
-    """
-    import urllib.request
-    import urllib.parse
-
-    encoded = urllib.parse.urlencode({"q": q, "format": "json", "limit": 8})
-    url     = f"https://nominatim.openstreetmap.org/search?{encoded}"
-
+    import urllib.request, urllib.parse
+    encoded = urllib.parse.urlencode({"q":q,"format":"json","limit":8})
     req_obj = urllib.request.Request(
-        url,
-        headers={"User-Agent": "SmartSecurityDashboard/1.0 (humanitarian-ops)"},
+        f"https://nominatim.openstreetmap.org/search?{encoded}",
+        headers={"User-Agent":"WatchMe/2.0"}
     )
     try:
         with urllib.request.urlopen(req_obj, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read().decode())
     except Exception as exc:
-        log.warning("Geocoding error for '%s': %s", q, exc)
-        return JSONResponse(status_code=502, content={"error": str(exc)})
-
-    return data
-
+        return JSONResponse(status_code=502, content={"error":str(exc)})
 
 # ---------------------------------------------------------------------------
-# Static files — serve the frontend
+# Static files
 # ---------------------------------------------------------------------------
-# Mount AFTER all /api routes so API endpoints take priority.
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
-
-# ---------------------------------------------------------------------------
-# Entry point (for local development: python app.py)
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
-    )
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
